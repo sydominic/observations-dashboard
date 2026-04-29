@@ -247,15 +247,51 @@ def _merge_external_topic_learning_rules() -> None:
 _merge_external_topic_learning_rules()
 
 def setup_korean_font():
+    """Configure a Korean-capable font for Matplotlib/PDF output.
+
+    Streamlit Cloud installs Linux fonts through packages.txt. However,
+    Matplotlib can still miss newly installed CJK fonts if the font cache is
+    stale. Therefore this function registers known font file paths directly
+    before falling back to font-family names.
+    """
+    rcParams["axes.unicode_minus"] = False
+    rcParams["pdf.fonttype"] = 42
+    rcParams["ps.fonttype"] = 42
+
+    font_file_candidates = [
+        "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf",
+        "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+        "C:/Windows/Fonts/malgun.ttf",
+        "C:/Windows/Fonts/malgunbd.ttf",
+        "/System/Library/Fonts/AppleSDGothicNeo.ttc",
+    ]
+    for font_path in font_file_candidates:
+        try:
+            fp = Path(font_path)
+            if fp.exists():
+                fm.fontManager.addfont(str(fp))
+                font_name = fm.FontProperties(fname=str(fp)).get_name()
+                if font_name:
+                    rcParams["font.family"] = [font_name]
+                    return font_name
+        except Exception as exc:
+            try:
+                log(f"korean font file registration failed: {font_path} / {exc}")
+            except Exception:
+                pass
+
     candidates = [
-        "Malgun Gothic", "맑은 고딕", "NanumGothic", "Nanum Gothic",
-        "Noto Sans CJK KR", "Noto Sans KR", "AppleGothic", "Batang", "Gulim"
+        "NanumGothic", "Nanum Gothic", "NanumBarunGothic",
+        "Noto Sans CJK KR", "Noto Sans CJK JP", "Noto Sans KR",
+        "Malgun Gothic", "맑은 고딕", "AppleGothic", "Batang", "Gulim"
     ]
     available = {f.name for f in fm.fontManager.ttflist}
     for name in candidates:
         if name in available:
-            rcParams["font.family"] = name
-            rcParams["axes.unicode_minus"] = False
+            rcParams["font.family"] = [name]
             return name
     return None
 FONT_NAME = setup_korean_font()
@@ -3675,7 +3711,7 @@ def main():
             st.info("기간 데이터가 없습니다.")
     log(f"dashboard rendered / rows={len(df)} / filtered={len(w)} / font={FONT_NAME}")
     if not FONT_NAME:
-        st.warning("한글 폰트를 찾지 못해 레포트 PDF 글꼴이 깨질 수 있습니다.")
+        st.error("한글 폰트를 찾지 못했습니다. GitHub의 packages.txt에 fonts-nanum이 포함되어 있는지 확인한 뒤 앱을 재부팅해 주세요.")
 try:
     if __name__ == "__main__":
         main()
