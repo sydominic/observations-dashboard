@@ -3604,6 +3604,76 @@ def main():
     .mfg-pill.primary {background:#e0ecff; color:#1d4ed8;}
     .mfg-pill.normal {background:#e8eef7; color:#334155;}
 
+
+    /* Sidebar admin upload / password visibility fix */
+    section[data-testid="stSidebar"] details[data-testid="stExpander"],
+    section[data-testid="stSidebar"] .stExpander {
+        background:rgba(255,255,255,0.06) !important;
+        border:1px solid rgba(255,255,255,0.16) !important;
+        border-radius:16px !important;
+        overflow:hidden !important;
+    }
+    section[data-testid="stSidebar"] details[data-testid="stExpander"] > summary,
+    section[data-testid="stSidebar"] .stExpander summary {
+        background:linear-gradient(90deg, rgba(8,49,111,0.98) 0%, rgba(14,71,137,0.96) 100%) !important;
+        border:1px solid rgba(255,255,255,0.14) !important;
+        border-radius:14px !important;
+        color:#ffffff !important;
+        min-height:48px !important;
+    }
+    section[data-testid="stSidebar"] details[data-testid="stExpander"][open] > summary,
+    section[data-testid="stSidebar"] .stExpander[open] summary,
+    section[data-testid="stSidebar"] .stExpander summary:hover {
+        background:linear-gradient(90deg, rgba(8,49,111,1) 0%, rgba(10,91,138,0.98) 100%) !important;
+        color:#ffffff !important;
+    }
+    section[data-testid="stSidebar"] details[data-testid="stExpander"] > summary *,
+    section[data-testid="stSidebar"] .stExpander summary * {
+        color:#ffffff !important;
+        fill:#ffffff !important;
+        opacity:1 !important;
+    }
+    section[data-testid="stSidebar"] details[data-testid="stExpander"] > div,
+    section[data-testid="stSidebar"] .stExpander > div {
+        background:rgba(6,43,99,0.46) !important;
+        border-radius:0 0 16px 16px !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stTextInput"] input,
+    section[data-testid="stSidebar"] .stTextInput input,
+    section[data-testid="stSidebar"] input[type="password"],
+    section[data-testid="stSidebar"] input[type="text"] {
+        background:#ffffff !important;
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+        caret-color:#0f172a !important;
+        border:1px solid rgba(255,255,255,0.60) !important;
+        border-radius:12px !important;
+        box-shadow:none !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stTextInput"] input::placeholder,
+    section[data-testid="stSidebar"] .stTextInput input::placeholder {
+        color:#64748b !important;
+        -webkit-text-fill-color:#64748b !important;
+        opacity:1 !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stTextInput"] button,
+    section[data-testid="stSidebar"] .stTextInput button,
+    section[data-testid="stSidebar"] div[data-testid="stTextInput"] svg,
+    section[data-testid="stSidebar"] .stTextInput svg,
+    section[data-testid="stSidebar"] div[data-testid="stTextInput"] [role="button"] {
+        color:#0f172a !important;
+        fill:#0f172a !important;
+        stroke:#0f172a !important;
+        opacity:1 !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stTextInput"] button *,
+    section[data-testid="stSidebar"] .stTextInput button * {
+        color:#0f172a !important;
+        fill:#0f172a !important;
+        stroke:#0f172a !important;
+        opacity:1 !important;
+    }
+
     hr {border:none; border-top:1px solid var(--hana-line);}
     </style>
     """, unsafe_allow_html=True)
