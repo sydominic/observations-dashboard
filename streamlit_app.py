@@ -3673,6 +3673,25 @@ def main():
         stroke:#0f172a !important;
         opacity:1 !important;
     }
+    /* Hide browser-native password reveal / clear icons and keep only Streamlit's toggle */
+    section[data-testid="stSidebar"] input[type="password"]::-ms-reveal,
+    section[data-testid="stSidebar"] input[type="password"]::-ms-clear,
+    section[data-testid="stSidebar"] input[type="text"]::-ms-reveal,
+    section[data-testid="stSidebar"] input[type="text"]::-ms-clear {
+        display:none !important;
+        width:0 !important;
+        height:0 !important;
+    }
+    section[data-testid="stSidebar"] input[type="password"]::-webkit-contacts-auto-fill-button,
+    section[data-testid="stSidebar"] input[type="password"]::-webkit-credentials-auto-fill-button,
+    section[data-testid="stSidebar"] input[type="password"]::-webkit-textfield-decoration-container,
+    section[data-testid="stSidebar"] input[type="text"]::-webkit-contacts-auto-fill-button,
+    section[data-testid="stSidebar"] input[type="text"]::-webkit-credentials-auto-fill-button,
+    section[data-testid="stSidebar"] input[type="text"]::-webkit-textfield-decoration-container {
+        visibility:hidden !important;
+        display:none !important;
+        pointer-events:none !important;
+    }
 
     hr {border:none; border-top:1px solid var(--hana-line);}
     </style>
