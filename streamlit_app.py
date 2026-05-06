@@ -6,6 +6,7 @@ import math
 import os
 import re
 import html
+import hashlib
 import subprocess
 import sys
 import traceback
@@ -467,6 +468,8 @@ def _storage_config() -> dict[str, str]:
         "bucket": _get_secret_value("SUPABASE_BUCKET", "gmp-dashboard"),
         "object": _get_secret_value("SUPABASE_OBJECT", "latest.xlsx"),
         "meta_object": _get_secret_value("SUPABASE_META_OBJECT", "latest_meta.json"),
+        "assignments_object": _get_secret_value("SUPABASE_ASSIGNMENTS_OBJECT", "topic_assignments.json"),
+        "runtime_rules_object": _get_secret_value("SUPABASE_RUNTIME_RULES_OBJECT", "topic_learning_rules_runtime.json"),
         "admin_password": _get_secret_value("ADMIN_PASSWORD"),
     }
 
@@ -527,6 +530,181 @@ def _storage_upload_bytes(cfg: dict[str, str], object_name: str, data: bytes, co
             raise RuntimeError(f"Supabase upload failed: {first_exc} / update failed: {second_exc}")
 
 
+# ---------------------------------------------------------------------
+# Persistent topic learning / row-level assignment
+# ---------------------------------------------------------------------
+ASSIGNMENT_SCHEMA_VERSION = "1.0"
+ROW_ID_FIELDS = [
+    "등록월",
+    "제조업체명",
+    "실사기간",
+    "유형",
+    "완제제형",
+    "실사방식",
+    "등급",
+    "감시분야",
+    "지적사항 요약",
+]
+
+
+def _clean_identity_value(value) -> str:
+    s = "" if value is None else str(value)
+    s = s.strip()
+    if s.lower() in {"nan", "nat", "none"}:
+        s = ""
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def make_observation_row_id(row) -> str:
+    """Create a stable row id.
+
+    Important: the finding text alone is not enough.
+    The id includes company/date/inspection-period/category fields so the same
+    observation text from another company or another inspection is not treated
+    as the same row.
+    """
+    parts = []
+    for col in ROW_ID_FIELDS:
+        parts.append(_clean_identity_value(row.get(col, "")))
+    source = "gmp-observation-v1|" + "|".join(parts)
+    return hashlib.sha256(source.encode("utf-8")).hexdigest()
+
+
+def _empty_assignment_store() -> dict:
+    return {
+        "schema_version": ASSIGNMENT_SCHEMA_VERSION,
+        "updated_at": "",
+        "rows": {},
+        "notes": "row_id별 확정 주제 저장소. 기존 행 유지용이며 일반 대시보드에는 표시하지 않습니다.",
+    }
+
+
+def _normalize_assignment_store(raw) -> dict:
+    if not isinstance(raw, dict):
+        return _empty_assignment_store()
+    if isinstance(raw.get("rows"), dict):
+        store = raw
+    else:
+        # Compatibility: allow a simple {row_id: topic_or_record} mapping.
+        rows = {}
+        for k, v in raw.items():
+            if not isinstance(k, str):
+                continue
+            if isinstance(v, dict):
+                topic = str(v.get("topic", "")).strip()
+                rec = dict(v)
+                rec.setdefault("topic", topic)
+            else:
+                topic = str(v).strip()
+                rec = {"topic": topic, "source": "legacy_mapping"}
+            if topic:
+                rows[k] = rec
+        store = _empty_assignment_store()
+        store["rows"] = rows
+    store.setdefault("schema_version", ASSIGNMENT_SCHEMA_VERSION)
+    store.setdefault("updated_at", "")
+    store.setdefault("rows", {})
+    return store
+
+
+def _assignment_topic_map(store: dict) -> dict[str, str]:
+    rows = store.get("rows", {}) if isinstance(store, dict) else {}
+    out: dict[str, str] = {}
+    if not isinstance(rows, dict):
+        return out
+    for row_id, rec in rows.items():
+        if isinstance(rec, dict):
+            topic = str(rec.get("topic", "")).strip()
+        else:
+            topic = str(rec).strip()
+        if row_id and topic:
+            out[str(row_id)] = topic
+    return out
+
+
+def _load_assignment_store(cfg: dict[str, str]) -> dict:
+    object_name = cfg.get("assignments_object", "topic_assignments.json")
+    raw = _storage_download_json(cfg, object_name) if _storage_ready(cfg) else {}
+    if not raw:
+        raw = st.session_state.get("topic_assignments_store", {})
+    return _normalize_assignment_store(raw)
+
+
+def _save_assignment_store(cfg: dict[str, str], store: dict) -> None:
+    store = _normalize_assignment_store(store)
+    store["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    payload = json.dumps(store, ensure_ascii=False, indent=2).encode("utf-8")
+    if _storage_ready(cfg):
+        _storage_upload_bytes(cfg, cfg.get("assignments_object", "topic_assignments.json"), payload, "application/json; charset=utf-8")
+    st.session_state["topic_assignments_store"] = store
+    st.session_state["topic_assignments_map"] = _assignment_topic_map(store)
+
+
+def _build_assignment_record(row, topic: str, source: str, filename: str = "") -> dict:
+    return {
+        "topic": str(topic).strip(),
+        "locked": True,
+        "source": source,
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "filename": filename,
+        "등록월": _clean_identity_value(row.get("등록월", "")),
+        "제조업체명": _clean_identity_value(row.get("제조업체명", "")),
+        "실사기간": _clean_identity_value(row.get("실사기간", "")),
+        "유형": _clean_identity_value(row.get("유형", "")),
+        "완제제형": _clean_identity_value(row.get("완제제형", "")),
+        "실사방식": _clean_identity_value(row.get("실사방식", "")),
+        "등급": _clean_identity_value(row.get("등급", "")),
+        "감시분야": _clean_identity_value(row.get("감시분야", "")),
+        "지적사항 요약": _clean_identity_value(row.get("지적사항 요약", "")),
+    }
+
+
+def _apply_persistent_topic_assignments(df: pd.DataFrame, cfg: dict[str, str]) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    out = df.copy()
+    out["_row_id"] = out.apply(make_observation_row_id, axis=1)
+    store = _load_assignment_store(cfg)
+    topic_map = _assignment_topic_map(store)
+    st.session_state["topic_assignments_store"] = store
+    st.session_state["topic_assignments_map"] = topic_map
+    out["확정주제그룹"] = out["_row_id"].map(topic_map).fillna("")
+    return out
+
+
+def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, str], filename: str) -> tuple[dict, int, int]:
+    """Freeze existing rows and classify only newly seen rows.
+
+    This runs only inside Admin Upload. The counts are kept in meta/session for
+    admin tracing but are not displayed on the public dashboard.
+    """
+    store = _load_assignment_store(cfg)
+    rows = store.setdefault("rows", {})
+    before_count = len(rows) if isinstance(rows, dict) else 0
+    if not isinstance(rows, dict):
+        rows = {}
+        store["rows"] = rows
+
+    added = 0
+    for _, row in check_df.iterrows():
+        if not is_real_finding(row.get("지적사항 요약", "")):
+            continue
+        row_id = make_observation_row_id(row)
+        if row_id in rows:
+            continue
+        # For a new row, use the existing engine once and freeze the result.
+        topic = _infer_topic_from_row_base(row)
+        if not topic:
+            topic = "세부 항목 관리"
+        rows[row_id] = _build_assignment_record(row, topic, "auto_new_upload", filename)
+        added += 1
+
+    _save_assignment_store(cfg, store)
+    return store, before_count, added
+
+
+
 def _validate_uploaded_workbook(uploaded_bytes: bytes) -> tuple[pd.DataFrame, list[str]]:
     df_check, sheets_check = load_workbook(uploaded_bytes)
     if df_check.empty:
@@ -583,21 +761,26 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                     st.success(f"업로드 전 검증 완료: {len(check_df):,}행 / 시트 {len(check_sheets)}개")
                     if st.button("업로드하고 latest.xlsx로 반영", type="primary", key="btn_upload_latest"):
                         if configured:
+                            assignment_store, assignment_existing, assignment_new = _prepare_assignments_for_uploaded_df(check_df, cfg, new_file.name)
                             meta = {
                                 "original_filename": new_file.name,
                                 "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 "size_bytes": len(uploaded_bytes),
                                 "rows": int(len(check_df)),
                                 "sheets": check_sheets,
+                                "assignment_existing_rows": int(assignment_existing),
+                                "assignment_new_rows": int(assignment_new),
+                                "assignments_object": cfg.get("assignments_object", "topic_assignments.json"),
                             }
                             _storage_upload_bytes(cfg, cfg["object"], uploaded_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                             _storage_upload_bytes(cfg, cfg["meta_object"], json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"), "application/json; charset=utf-8")
                             st.session_state["latest_excel_override_bytes"] = uploaded_bytes
                             st.session_state["latest_excel_override_meta"] = meta
                             load_workbook.clear()
-                            st.success("Supabase Storage의 latest.xlsx를 갱신했습니다. 화면을 다시 불러옵니다.")
+                            st.success("Supabase Storage의 latest.xlsx와 topic_assignments.json을 갱신했습니다. 화면을 다시 불러옵니다.")
                             st.rerun()
                         else:
+                            assignment_store, assignment_existing, assignment_new = _prepare_assignments_for_uploaded_df(check_df, cfg, new_file.name)
                             st.session_state["latest_excel_override_bytes"] = uploaded_bytes
                             st.session_state["latest_excel_override_meta"] = {
                                 "original_filename": new_file.name,
@@ -606,6 +789,8 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                                 "rows": int(len(check_df)),
                                 "sheets": check_sheets,
                                 "storage": "session_only",
+                                "assignment_existing_rows": int(assignment_existing),
+                                "assignment_new_rows": int(assignment_new),
                             }
                             load_workbook.clear()
                             st.warning("Supabase 미설정 상태라 현재 세션에만 임시 반영했습니다.")
@@ -1422,7 +1607,7 @@ def _refine_topic_candidate(field: str, summary: str, topic: str) -> str:
             return "제조업체/공급자 평가"
     return topic
 
-def infer_topic_from_row(row) -> str:
+def _infer_topic_from_row_base(row) -> str:
     field = normalize_field(row.get("감시분야", ""))
     summary = str(row.get("지적사항 요약", "")).strip()
     ref1 = str(row.get("1차 구분", "")).strip()
@@ -1477,6 +1662,30 @@ def infer_topic_from_row(row) -> str:
         return _refine_topic_candidate(field, summary, topic)
 
     return defaults.get(field, "세부 항목 관리")
+
+
+def infer_topic_from_row(row) -> str:
+    # 1) Row-level assignment: only exact same row_id keeps the existing classification.
+    fixed_topic = str(row.get("확정주제그룹", "")).strip()
+    if fixed_topic:
+        return fixed_topic
+
+    row_id = str(row.get("_row_id", "")).strip()
+    if not row_id:
+        try:
+            row_id = make_observation_row_id(row)
+        except Exception:
+            row_id = ""
+    if row_id:
+        topic_map = st.session_state.get("topic_assignments_map", {})
+        if isinstance(topic_map, dict):
+            topic = str(topic_map.get(row_id, "")).strip()
+            if topic:
+                return topic
+
+    # 2) New row: use the current built-in/JSON topic engine.
+    return _infer_topic_from_row_base(row)
+
 
 def build_top5_table(df: pd.DataFrame, period_label: str) -> pd.DataFrame:
     qf = filter_by_period(df, period_label).copy()
@@ -3673,7 +3882,7 @@ def main():
         stroke:#0f172a !important;
         opacity:1 !important;
     }
-    /* Hide browser-native password reveal / clear icons and keep only Streamlit's toggle */
+    /* Hide browser-native password reveal/clear icons and keep only Streamlit's toggle. */
     section[data-testid="stSidebar"] input[type="password"]::-ms-reveal,
     section[data-testid="stSidebar"] input[type="password"]::-ms-clear,
     section[data-testid="stSidebar"] input[type="text"]::-ms-reveal,
@@ -3699,6 +3908,7 @@ def main():
     st.title("📋 식약처 의약품 GMP 실태조사결과 Dashboard")
     latest_bytes, latest_meta, source_label = _render_data_source_panel()
     df, sheets = load_workbook(latest_bytes)
+    df = _apply_persistent_topic_assignments(df, _storage_config())
     if df.empty:
         log("엑셀 파일을 찾지 못했습니다.")
         st.warning("아직 최신 엑셀 데이터가 없습니다. 사이드바의 Admin Upload에서 엑셀을 업로드하십시오.")
