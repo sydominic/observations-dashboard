@@ -571,6 +571,108 @@ def make_observation_row_id(row) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
+def _priority_topic_override_v7(field: str, summary: str, ref1: str = "", ref2: str = "") -> str:
+    """High-priority PY rules for confirmed misclassified 2025 highlighted rows.
+
+    These rules intentionally run before JSON/assignment fallback because v6 may
+    already have frozen the previous wrong topic in topic_assignments.json.
+    The rules are phrase-combination based, not broad single-keyword matching.
+    """
+    field = normalize_field(field)
+    compact = _normalize_topic_text(normalize_summary_for_grouping(summary))
+    ref_compact = _normalize_topic_text(f"{ref1} {ref2}")
+
+    def has_any(*words: str) -> bool:
+        return any(_normalize_topic_text(w) in compact for w in words if w)
+
+    def has_all(*words: str) -> bool:
+        return all(_normalize_topic_text(w) in compact for w in words if w)
+
+    # 품질경영 / 문서 / 시스템 계열
+    if has_all("품질", "기록", "사실대로"):
+        return "품질기록 사실성 관리"
+    if has_any("품질에관한기록") and has_any("사실대로", "정확하게"):
+        return "품질기록 사실성 관리"
+    if has_any("자율점검") and has_any("절차", "평가사항", "조치"):
+        return "품질시스템 관리"
+    if has_any("반복불만", "반복되는불만") or (has_any("불만") and has_any("반복", "재발")):
+        return "불만처리"
+    if has_any("문서") and has_any("배포", "회수") and has_any("기록", "관리"):
+        return "문서/총람 관리"
+    if has_any("문서관리") and has_any("배포", "회수", "기록"):
+        return "문서/총람 관리"
+    if has_any("교육관리절차", "교육훈련절차") or (has_any("교육") and has_any("절차") and has_any("관리")):
+        return "교육/훈련 관리"
+    if has_any("밸리데이션종합계획", "밸리데이션종합계획서"):
+        return "밸리데이션 종합계획 관리"
+    if has_any("품질평가", "제품품질평가", "제품품질평가결과") and has_any("경향", "추세", "개선"):
+        return "제품품질평가/PQR"
+
+    # 시험실 / 시험방법 / 검체 / 시험기기
+    if has_any("시험실간", "시험실간비교") and has_any("동일검체", "동일한검체", "검체") and has_any("수행", "증명", "비교"):
+        return "시험실간 비교/증명 관리"
+    if has_any("시험방법기준서", "시험방법") and has_any("기준서", "마련", "설정", "판정기준"):
+        return "시험방법/판정기준"
+    if has_any("시험용검체", "검체입고", "검체") and has_any("동등조건", "동일조건", "보관조건", "입고"):
+        return "검체채취/검체관리"
+    if has_any("시스템적합성", "시스템적합성시험") and has_any("장비사용전", "사용전", "시험전"):
+        return "시험기기 적격성/교정"
+    if has_any("장비사용전") and has_any("시스템", "적합성"):
+        return "시험기기 적격성/교정"
+    if has_any("시험결과") and has_any("검토절차", "검토절차서", "검토") and has_any("절차", "기준"):
+        return "시험결과 검토절차 관리"
+    if has_any("직접자재") and has_any("엔도톡신", "엔도톡신시험"):
+        return "직접자재 엔도톡신시험 관리"
+
+    # 제조 / 세척 / 공정밸리데이션 / 멸균
+    if has_any("잔류물") and has_any("세척", "세척확인", "세척검증"):
+        return "세척 밸리데이션/세척관리"
+    if has_any("연속생산") and has_any("세척") and has_any("유효성", "검증"):
+        return "세척 밸리데이션/세척관리"
+    if has_any("수동세척") and has_any("설비", "세척주기", "주기", "유효성"):
+        return "세척 밸리데이션/세척관리"
+    if has_any("세척주기") and has_any("수동세척", "설비"):
+        return "세척 밸리데이션/세척관리"
+    if has_any("투입기준량", "기준량") and has_any("실사용량", "실제사용량", "사용량") and has_any("근거", "산출"):
+        return "실사용량 산출근거 관리"
+    if has_any("중간체") and has_any("실사용량", "실제사용량") and has_any("기준량", "산출근거"):
+        return "실사용량 산출근거 관리"
+    if has_any("massup", "mass-up", "매스업") and has_any("도구", "기구"):
+        return "제조도구/기구 관리"
+    if has_any("제조도구", "제조기구") and has_any("관리", "세척", "보관"):
+        return "제조도구/기구 관리"
+    if has_any("멸균공정주기", "멸균공정") and has_any("적재유형", "적재패턴", "유효성", "검증"):
+        return "공정밸리데이션"
+    if has_any("최종멸균공정", "최종멸균") and has_any("최악조건", "검체채취", "검체"):
+        return "최종멸균공정 검체채취 관리"
+    if has_any("멸균기") and has_any("추가자료", "자료제출", "적격성평가", "성능"):
+        return "장비 적격성평가"
+    if has_any("레진교체주기", "레진") and has_any("교체주기", "주기"):
+        return "공정조건/변수 관리"
+    if has_any("재포장") and has_any("여부", "확인", "표시"):
+        return "재포장 제품 표시관리"
+
+    # 환경 / 청소 / 작업복 / 위생
+    if has_any("미립자", "부유입자", "부유입자계수기", "제조환경미립자") and has_any("관리", "위치", "선정", "모니터링", "계수기"):
+        return "환경모니터링 관리"
+    if has_any("부유입자계수기") and has_any("위치", "선정"):
+        return "환경모니터링 관리"
+    if has_any("무균복", "멸균작업복", "작업복") and has_any("멸균횟수", "멸균", "갱의", "관리"):
+        return "작업복/갱의 관리"
+    if has_any("청정등급구역", "청정구역") and has_any("행위", "작업자행위", "오염"):
+        return "작업실 오염방지 관리"
+    if has_any("무균작업실", "작업소") and has_any("위생관리", "청소", "소독"):
+        return "청소/소독 관리"
+    if has_any("제조위생관리", "위생관리") and has_any("집진후드", "후드", "청소"):
+        return "청소/소독 관리"
+    if has_any("집진후드") and has_any("청소", "위생"):
+        return "청소/소독 관리"
+    if has_any("소독제") and has_any("자료", "유효성", "선정", "관리"):
+        return "청소/소독 관리"
+
+    return ""
+
+
 def _empty_assignment_store() -> dict:
     return {
         "schema_version": ASSIGNMENT_SCHEMA_VERSION,
@@ -687,19 +789,35 @@ def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, 
         store["rows"] = rows
 
     added = 0
+    updated = 0
     for _, row in check_df.iterrows():
         if not is_real_finding(row.get("지적사항 요약", "")):
             continue
         row_id = make_observation_row_id(row)
+        priority_topic = _priority_topic_override_v7(
+            row.get("감시분야", ""),
+            row.get("지적사항 요약", ""),
+            row.get("1차 구분", ""),
+            row.get("2차 구분 (참고)", ""),
+        )
         if row_id in rows:
+            # If v6 already froze a wrong auto topic, allow confirmed v7 PY rules to correct it.
+            rec = rows.get(row_id, {})
+            old_topic = str(rec.get("topic", "") if isinstance(rec, dict) else rec).strip()
+            old_source = str(rec.get("source", "") if isinstance(rec, dict) else "").strip()
+            if priority_topic and old_topic != priority_topic and not old_source.startswith("manual"):
+                rows[row_id] = _build_assignment_record(row, priority_topic, "py_priority_override_v7", filename)
+                updated += 1
             continue
-        # For a new row, use the existing engine once and freeze the result.
-        topic = _infer_topic_from_row_base(row)
+        # For a new row, use priority PY rules first, then the existing engine once and freeze the result.
+        topic = priority_topic or _infer_topic_from_row_base(row)
         if not topic:
             topic = "세부 항목 관리"
-        rows[row_id] = _build_assignment_record(row, topic, "auto_new_upload", filename)
+        rows[row_id] = _build_assignment_record(row, topic, "auto_new_upload_v7", filename)
         added += 1
 
+    if updated:
+        store["last_auto_corrected"] = int(updated)
     _save_assignment_store(cfg, store)
     return store, before_count, added
 
@@ -1630,6 +1748,10 @@ def _infer_topic_from_row_base(row) -> str:
     if "데이터 완전성" in s or "무결성" in s or str(ref1).upper() == "DI" or str(ref2).upper() == "DI":
         return "데이터 완전성 평가"
 
+    topic = _priority_topic_override_v7(field, summary, ref1, ref2)
+    if topic:
+        return topic
+
     topic = _semantic_topic_override(field, summary, ref1, ref2)
     if topic:
         return topic
@@ -1665,6 +1787,17 @@ def _infer_topic_from_row_base(row) -> str:
 
 
 def infer_topic_from_row(row) -> str:
+    # 0) Confirmed PY priority rules must run before frozen assignments.
+    #    This corrects rows that v6 may already have saved with a wrong auto topic.
+    priority_topic = _priority_topic_override_v7(
+        row.get("감시분야", ""),
+        row.get("지적사항 요약", ""),
+        row.get("1차 구분", ""),
+        row.get("2차 구분 (참고)", ""),
+    )
+    if priority_topic:
+        return priority_topic
+
     # 1) Row-level assignment: only exact same row_id keeps the existing classification.
     fixed_topic = str(row.get("확정주제그룹", "")).strip()
     if fixed_topic:
@@ -1726,7 +1859,7 @@ def build_quarter_summary_lines(df: pd.DataFrame, quarter_label: str):
         sub = qf[qf["감시분야"].astype(str).str.strip() == field].copy()
         if sub.empty:
             continue
-        sub["주제그룹"] = sub["지적사항 요약"].map(lambda s: classify_topic(field, s))
+        sub["주제그룹"] = sub.apply(lambda r: infer_topic_from_row(r), axis=1)
         sub = sub[sub["주제그룹"].astype(str).str.strip() != ""].copy()
         if sub.empty:
             continue
