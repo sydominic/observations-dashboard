@@ -1,0 +1,15 @@
+GMP Dashboard Streamlit Cloud + Supabase v8
+
+핵심 변경:
+- 대시보드 화면 구조는 변경하지 않음.
+- 단건 행만 보정하는 방식이 아니라 향후 유사 문장도 오분류되지 않도록 PY 우선순위 규칙을 보강함.
+- 멸균 관련 문장을 대상별로 분기함.
+  1) 멸균공정주기/적재유형/멸균공정 유효성/추가설명자료 → 멸균공정 밸리데이션
+  2) 멸균기/오토클레이브/sterilizer/autoclave 자체 → 멸균기 적격성평가
+  3) 제균여과필터/무균여과/멸균여과/filter integrity → 제균여과필터 관리
+- v6/v7에서 자동 저장된 기존 topic_assignments 중 manual이 아닌 값은 v8 PY 우선순위 규칙과 충돌할 경우 자동 보정 가능.
+- JSON은 보조 규칙으로 유지하고, 확실한 오분류 방지는 PY 우선순위 규칙에서 먼저 처리함.
+
+적용 후:
+- GitHub에 streamlit_app.py를 교체하고 commit.
+- Streamlit Cloud 재배포 후 Admin Upload에서 같은 최신 엑셀을 다시 업로드해야 topic_assignments.json이 보정됨.

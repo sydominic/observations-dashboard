@@ -641,12 +641,31 @@ def _priority_topic_override_v7(field: str, summary: str, ref1: str = "", ref2: 
         return "제조도구/기구 관리"
     if has_any("제조도구", "제조기구") and has_any("관리", "세척", "보관"):
         return "제조도구/기구 관리"
-    if has_any("멸균공정주기", "멸균공정") and has_any("적재유형", "적재패턴", "유효성", "검증"):
-        return "공정밸리데이션"
+    # Sterilization-related rules are deliberately split by target.
+    # - process/cycle/load pattern -> sterilization process validation
+    # - sterilizer/autoclave equipment itself -> sterilizer qualification
+    # - sterilizing filtration filter -> sterilizing filter management
+    if (
+        has_any("멸균공정주기", "멸균공정", "멸균공정유효성", "멸균사이클", "멸균싸이클")
+        and has_any("적재유형", "적재패턴", "적재조건", "유효성", "검증", "밸리데이션", "추가설명", "설명자료", "자료제출")
+    ):
+        return "멸균공정 밸리데이션"
+    if has_any("멸균공정") and has_any("추가설명자료", "추가자료", "자료제출", "설명자료"):
+        return "멸균공정 밸리데이션"
     if has_any("최종멸균공정", "최종멸균") and has_any("최악조건", "검체채취", "검체"):
         return "최종멸균공정 검체채취 관리"
-    if has_any("멸균기") and has_any("추가자료", "자료제출", "적격성평가", "성능"):
-        return "장비 적격성평가"
+    if (
+        has_any("멸균기", "오토클레이브", "autoclave", "sterilizer")
+        and has_any("추가설명자료", "추가자료", "자료제출", "설명자료", "적격성평가", "적격성", "성능", "유효성", "정기점검")
+    ):
+        return "멸균기 적격성평가"
+    if (
+        has_any("제균여과필터", "제균여과", "무균여과", "멸균여과", "sterilizingfilter", "sterilefilter", "filterintegrity")
+        and has_any("필터", "filter", "완전성", "무균", "제균", "여과", "자료", "자료제출", "추가설명", "설명자료")
+    ):
+        return "제균여과필터 관리"
+    if has_any("여과필터", "필터") and has_any("제균", "무균여과", "멸균여과", "완전성시험", "완전성"):
+        return "제균여과필터 관리"
     if has_any("레진교체주기", "레진") and has_any("교체주기", "주기"):
         return "공정조건/변수 관리"
     if has_any("재포장") and has_any("여부", "확인", "표시"):
@@ -806,14 +825,14 @@ def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, 
             old_topic = str(rec.get("topic", "") if isinstance(rec, dict) else rec).strip()
             old_source = str(rec.get("source", "") if isinstance(rec, dict) else "").strip()
             if priority_topic and old_topic != priority_topic and not old_source.startswith("manual"):
-                rows[row_id] = _build_assignment_record(row, priority_topic, "py_priority_override_v7", filename)
+                rows[row_id] = _build_assignment_record(row, priority_topic, "py_priority_override_v8", filename)
                 updated += 1
             continue
         # For a new row, use priority PY rules first, then the existing engine once and freeze the result.
         topic = priority_topic or _infer_topic_from_row_base(row)
         if not topic:
             topic = "세부 항목 관리"
-        rows[row_id] = _build_assignment_record(row, topic, "auto_new_upload_v7", filename)
+        rows[row_id] = _build_assignment_record(row, topic, "auto_new_upload_v8", filename)
         added += 1
 
     if updated:
