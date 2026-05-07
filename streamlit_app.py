@@ -3719,26 +3719,15 @@ def render_manufacturer_dashboard(df: pd.DataFrame, selected_period_override: st
     badge_class = {'즉시 관리 필요':'danger','중대 이슈 관리':'warn','지속 관리 필요':'primary','일반 모니터링':'normal'}.get(sel_sum['우선관리등급'],'primary')
     info_cols[6].markdown(f"<div class='mfg-metric-card'><div class='mfg-metric-label'>우선관리 등급</div><div class='mfg-pill {badge_class}'>{sel_sum['우선관리등급']}</div></div>", unsafe_allow_html=True)
     with info_cols[7]:
-        search_kw = st.text_input(
-            "제조처 검색",
-            value="",
-            key="manufacturer_company_keyword_search",
-            placeholder="회사명 일부 입력"
-        ).strip()
-        if search_kw:
-            filtered_companies = [c for c in company_list if search_kw.lower() in str(c).lower()]
-        else:
-            filtered_companies = company_list
-        if not filtered_companies:
-            st.caption("검색 결과가 없어 전체 목록을 표시합니다.")
-            filtered_companies = company_list
-        selected_index = filtered_companies.index(current_company) if current_company in filtered_companies else 0
-        chosen = st.selectbox(
-            "전체 제조처 조회",
-            filtered_companies,
-            index=selected_index,
-            key="manufacturer_selectbox_v13"
+        chosen_list = st.multiselect(
+            "제조업체명",
+            company_list,
+            default=[current_company] if current_company in company_list else [],
+            max_selections=1,
+            placeholder="제조업체명 선택 또는 검색",
+            key="manufacturer_selectbox_v14"
         )
+        chosen = chosen_list[0] if chosen_list else current_company
         if chosen != current_company:
             st.session_state["selected_manufacturer_company"] = chosen
             st.query_params["mfg_company"] = chosen
