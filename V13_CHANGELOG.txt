@@ -1,0 +1,5 @@
+v13 - Manufacturer company search control
+
+- Manufacturer 탭의 전체 제조처 조회 컨트롤에 키워드 검색 입력칸을 추가했습니다.
+- 회사명 일부를 입력하면 해당 키워드를 포함한 제조처 목록만 selectbox에 표시됩니다.
+- 기존 제조처 상세 분석, Trend, Heatmap 로직은 변경하지 않았습니다.
