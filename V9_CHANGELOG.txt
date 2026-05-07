@@ -1,0 +1,30 @@
+GMP Dashboard Streamlit Cloud v9
+
+변경 목적
+- 대시보드 기본 기간을 현재 날짜 기준 분기로 자동 선택
+- Observation / Manufacturer / Analysis Report / 상세데이터 / Top5 상세보기 기간 기준 통합
+- 사이드바 기간 필터 중복 제거 및 보조 필터 역할 정리
+
+주요 변경
+1. 현재 한국 날짜 기준 기본 분기 자동 선택
+   - 예: 2026-05-07 -> 2026-2Q
+   - 현재 분기 데이터가 없으면 데이터상 가장 최신 분기로 자동 fallback
+
+2. 공통 기간 선택값 도입
+   - selected_period_global_v9 하나로 Observation, Manufacturer, Analysis Report, 상세데이터, Top5 상세보기 제어
+   - 기존 selected_period_main_tab, selected_period_manufacturer_tab도 내부적으로 동기화하여 기존 로직 호환
+
+3. Observation 탭 차트/상세데이터 연동
+   - 제조업체 수, 지적사항 건수, 감시분야/등급 그래프, 상세데이터가 모두 선택 기간 기준으로 표시
+   - Top5 표와 돋보기 상세보기도 같은 선택 기간 기준으로 표시
+
+4. Manufacturer 탭 연동
+   - 별도 기간 선택값 대신 공통 기간 선택값 사용
+   - 제조처 리스크 랭킹, 요약, 상세 분석이 동일 기간 기준으로 표시
+
+5. Analysis Report 연동
+   - Letter PDF, 내부 감시용 Checklist, One page Checklist 모두 공통 선택 기간 기준으로 생성
+
+6. 사이드바 필터 정리
+   - 연도/분기 사이드바 필터는 제거
+   - 제조업체명, 유형, 감시분야, 등급, 실사연월, 키워드는 선택 기간 내 보조 필터로 유지

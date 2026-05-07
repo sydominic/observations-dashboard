@@ -10,7 +10,7 @@ import hashlib
 import subprocess
 import sys
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from urllib.parse import quote
 from pathlib import Path
 LOG_FILE = Path(__file__).resolve().parent / "run_dashboard.log"
@@ -1006,38 +1006,13 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
         insp_months = sorted([x for x in w.get("실사연월", pd.Series(dtype=str)).astype(str).tolist() if x and x.lower() != "nan"], reverse=True)
         insp_months = list(dict.fromkeys(insp_months))
 
-        selected_years = st.multiselect("연도", years, default=years, on_change=reset_page)
-        period_years = selected_years if selected_years else years
-        period_options = []
-        for y in period_years:
-            period_options.extend([f"{y}-1Q", f"{y}-2Q", f"{y}-3Q", f"{y}-4Q", f"{y}-연간"])
-        selected_periods = st.multiselect("분기", period_options, default=period_options, on_change=reset_page)
+        st.caption("기간은 메인 화면 상단의 공통 기간 선택값을 기준으로 적용됩니다.")
         selected_companies = st.multiselect("제조업체명", companies, on_change=reset_page)
         selected_types = st.multiselect("유형", types, on_change=reset_page)
         selected_fields = st.multiselect("감시분야", fields, on_change=reset_page)
         selected_grades = st.multiselect("등급", grades, on_change=reset_page)
         selected_insp_months = st.multiselect("실사연월", insp_months, on_change=reset_page)
         keyword = st.text_input("키워드", on_change=reset_page)
-    if selected_years:
-        w = w[w["연도"].isin(selected_years)]
-    if selected_periods:
-        annual_years = []
-        quarter_periods = []
-        for p in selected_periods:
-            p = str(p).strip()
-            if p.endswith("연간"):
-                try:
-                    annual_years.append(int(p.split("-")[0]))
-                except Exception:
-                    pass
-            else:
-                quarter_periods.append(p)
-        period_mask = pd.Series(False, index=w.index)
-        if quarter_periods and "연도분기" in w.columns:
-            period_mask = period_mask | w["연도분기"].astype(str).isin(quarter_periods)
-        if annual_years and "연도" in w.columns:
-            period_mask = period_mask | w["연도"].isin(annual_years)
-        w = w[period_mask]
     if selected_companies:
         w = w[w["제조업체명"].isin(selected_companies)]
     if selected_types:
@@ -1909,6 +1884,85 @@ def available_periods(df: pd.DataFrame):
         y, q = v.split("-")
         return (int(y), int(q.replace("Q","")))
     return sorted(periods, key=key)
+
+
+def _current_quarter_label(today: datetime | None = None) -> str:
+    """Return current Korean-calendar quarter label, e.g. 2026-2Q."""
+    # Streamlit Cloud may run on UTC. Use Korea time for dashboard default selection.
+    today = today or (datetime.utcnow() + timedelta(hours=9))
+    q = ((int(today.month) - 1) // 3) + 1
+    return f"{int(today.year)}-{q}Q"
+
+
+def _period_sort_key(period_label: str) -> tuple[int, int]:
+    s = str(period_label or "").strip()
+    try:
+        if s.endswith("연간"):
+            return (int(s.split("-")[0]), 9)
+        y, q = s.split("-")
+        return (int(y), int(q.replace("Q", "")))
+    except Exception:
+        return (0, 0)
+
+
+def _default_dashboard_period(period_opts: list[str]) -> str | None:
+    """Default to the current calendar quarter when data exists; otherwise latest data quarter."""
+    if not period_opts:
+        return None
+    current_q = _current_quarter_label()
+    if current_q in period_opts:
+        return current_q
+    quarter_opts = [p for p in period_opts if str(p).endswith("Q")]
+    if quarter_opts:
+        return sorted(quarter_opts, key=_period_sort_key)[-1]
+    return sorted(period_opts, key=_period_sort_key)[-1]
+
+
+def _render_global_period_selector(df: pd.DataFrame) -> tuple[str | None, list[str]]:
+    """One shared period selector for Observation, Manufacturer, Report and detail views."""
+    period_opts = available_periods(df)
+    if not period_opts:
+        st.info("기간 데이터가 없습니다.")
+        return None, []
+
+    qp_period = st.query_params.get("period") or st.query_params.get("mfg_period")
+    if isinstance(qp_period, list):
+        qp_period = qp_period[0] if qp_period else None
+
+    default_period = _default_dashboard_period(period_opts)
+    if qp_period in period_opts:
+        default_period = qp_period
+
+    key = "selected_period_global_v9"
+    if key not in st.session_state or st.session_state.get(key) not in period_opts:
+        st.session_state[key] = default_period
+
+    top_cols = st.columns([7.0, 2.0])
+    with top_cols[0]:
+        selected_period = st.selectbox(
+            "기간 선택",
+            period_opts,
+            index=period_opts.index(st.session_state[key]),
+            key=key,
+        )
+    with top_cols[1]:
+        st.markdown("<div style='height:1.65rem'></div>", unsafe_allow_html=True)
+        if st.button("새로고침", key="global_period_refresh_btn", use_container_width=True):
+            st.rerun()
+
+    # Keep legacy keys/query params synchronized for existing report/manufacturer links.
+    st.session_state["selected_period_main_tab"] = selected_period
+    st.session_state["selected_period_manufacturer_tab"] = selected_period
+    try:
+        if st.query_params.get("period") != selected_period:
+            st.query_params["period"] = selected_period
+        if st.query_params.get("mfg_period") != selected_period:
+            st.query_params["mfg_period"] = selected_period
+    except Exception:
+        pass
+    return selected_period, period_opts
+
+
 def filter_by_period(df: pd.DataFrame, period_label: str) -> pd.DataFrame:
     if str(period_label).endswith("연간"):
         year = int(str(period_label).split("-")[0])
@@ -3544,23 +3598,15 @@ def _restore_active_tab_from_query():
     </script>
     """, height=0)
 
-def render_manufacturer_dashboard(df: pd.DataFrame):
+def render_manufacturer_dashboard(df: pd.DataFrame, selected_period_override: str | None = None):
     period_opts = _manufacturer_period_options(df)
     if period_opts:
-        qp_period = st.query_params.get("mfg_period")
-        if isinstance(qp_period, list):
-            qp_period = qp_period[0] if qp_period else None
-        default_period = qp_period or st.session_state.get("selected_period_main_tab") or period_opts[0]
-        if default_period not in period_opts:
-            default_period = period_opts[0]
-        top_cols = st.columns([1.2, 0.8, 0.8])
-        with top_cols[0]:
-            selected_period = st.selectbox("기간", period_opts, index=period_opts.index(default_period), key="selected_period_manufacturer_tab")
-            st.query_params["mfg_period"] = selected_period
-        with top_cols[1]:
-            st.markdown("<div style='height:1.7rem'></div>", unsafe_allow_html=True)
-            if st.button("새로고침", key="mfg_refresh_btn", use_container_width=True):
-                st.rerun()
+        selected_period = selected_period_override if selected_period_override in period_opts else _default_dashboard_period(period_opts)
+        try:
+            if st.query_params.get("mfg_period") != selected_period:
+                st.query_params["mfg_period"] = selected_period
+        except Exception:
+            pass
     else:
         selected_period = None
     mf_all, summary_df, _ = build_manufacturer_dataset(df, selected_period)
@@ -4074,7 +4120,9 @@ def main():
             + " · 업로드일시: "
             + str(latest_meta.get("uploaded_at", "-"))
         )
-    w = apply_filters(df)
+    selected_period, period_opts = _render_global_period_selector(df)
+    w_base = apply_filters(df)
+    w = filter_by_period(w_base, selected_period).copy() if selected_period else w_base.copy()
     actual, field_df, grade_df = get_count_frames(w)
     observation_tab, manufacturer_tab, report_tab = st.tabs(["📊 Dashboard (Observation)", "🏭 Dashboard (Manufacturer)", "📑 Analysis Report"])
     _restore_active_tab_from_query()
@@ -4091,26 +4139,18 @@ def main():
             row2c1.plotly_chart(make_bar(grade_df, "등급", "등급별 건수"), use_container_width=True)
             row2c2.plotly_chart(make_pie(grade_df, "등급", "등급별 비율"), use_container_width=True)
         st.markdown("### 📈 감시분야 별 지적사항 Top5 유형")
-        period_opts = available_periods(df)
-        if period_opts:
-            selected_period = st.selectbox("기간 선택", period_opts, key="selected_period_main_tab")
-            render_top5_modal_component(df, selected_period)
+        if period_opts and selected_period:
+            render_top5_modal_component(w_base, selected_period)
         else:
-            selected_period = None
             st.info("기간 데이터가 없습니다.")
         paginate(w)
     with manufacturer_tab:
-        render_manufacturer_dashboard(df)
+        render_manufacturer_dashboard(w_base, selected_period)
     with report_tab:
-        period_opts = available_periods(df)
-        selected_period = st.session_state.get("selected_period_main_tab") if period_opts else None
-        if period_opts and not selected_period:
-            selected_period = period_opts[0]
-            st.session_state["selected_period_main_tab"] = selected_period
         st.markdown("### 📄 식약처 의약품 GMP 실태조사 Letter 다운로드")
         st.caption("선택한 기간(분기/연간) 기준으로 3페이지 PDF Letter를 생성합니다. 1페이지는 분석 요약문, 2페이지는 Top5 표와 보조 요약정보, 3페이지는 감시분야/등급 그래프입니다.")
         if period_opts and selected_period:
-            pf = filter_by_period(df, selected_period).copy()
+            pf = filter_by_period(w_base, selected_period).copy()
             pdf_bytes = cached_report_pdf(pf, selected_period)
             st.download_button(
                 label=f"📄 식약처 의약품 GMP 실태조사 Letter 다운로드 ({selected_period})",
@@ -4125,7 +4165,7 @@ def main():
         st.markdown("### 🗂️ 내부 감시용 Checklist 다운로드")
         st.caption("선택한 기간의 실제 지적사항 문장을 읽어 반복 지적을 관리축으로 묶은 내부 감시용 세로 PDF입니다. 분야별로 분리해서 보여주며, 각 분야에서 최대 10개까지 체크리스트를 추립니다. 10개 미만인 경우는 해당 개수만 반영합니다.")
         if period_opts and selected_period:
-            pf_check = filter_by_period(df, selected_period).copy()
+            pf_check = filter_by_period(w_base, selected_period).copy()
             checklist_preview = build_repetitive_checklist_items(pf_check, selected_period, topn_per_field=10)
             if checklist_preview.empty:
                 st.info("해당 기간에는 체크리스트로 정리할 반복 지적사항이 부족합니다.")
