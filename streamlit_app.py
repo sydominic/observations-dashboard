@@ -3542,40 +3542,36 @@ def build_manufacturer_dataset(df: pd.DataFrame, period_label: str | None):
     summary_df = pd.DataFrame(summary_rows).sort_values(["리스크점수", "총지적건수", "제조업체명"], ascending=[False, False, True]).reset_index(drop=True)
     return mf, summary_df, mf
 
+def _manufacturer_quarter_periods_only(df: pd.DataFrame) -> list[str]:
+    """Manufacturer detail trend/heatmap must show quarter flow only.
+    Annual labels are cumulative summary periods and must not be plotted as another time point.
+    """
+    return [p for p in available_quarters(df) if str(p).endswith("Q")]
+
 def make_manufacturer_trend(manufacturer_df: pd.DataFrame):
     if manufacturer_df.empty:
         return pd.DataFrame(columns=["기간", "건수"])
     period_rows = []
-    seen_counts = set()
-    for p in available_periods(manufacturer_df):
+    for p in _manufacturer_quarter_periods_only(manufacturer_df):
         pf = filter_by_period(manufacturer_df, p).copy()
-        count_val = int(len(pf))
-        if count_val in seen_counts:
-            continue
-        seen_counts.add(count_val)
-        period_rows.append({"기간": p, "건수": count_val})
+        period_rows.append({"기간": p, "건수": int(len(pf))})
     return pd.DataFrame(period_rows)
 
 def make_subtopic_heatmap_df(mf_all: pd.DataFrame, company: str):
     sub = mf_all[mf_all["제조업체명"] == company].copy()
     if sub.empty:
         return pd.DataFrame()
-    periods = available_periods(sub)
+    periods = _manufacturer_quarter_periods_only(sub)
     if periods:
-        periods = periods[-3:]
+        periods = periods[-4:]
     else:
         periods = ["전체"]
         sub["_기간"] = "전체"
     if periods != ["전체"]:
         records = []
-        seen_signatures = set()
         for p in periods:
             pf = filter_by_period(sub, p).copy()
             topic_series = pf["세부구분"].value_counts().head(8)
-            signature = tuple((str(topic), int(cnt)) for topic, cnt in topic_series.items())
-            if signature in seen_signatures:
-                continue
-            seen_signatures.add(signature)
             for topic, cnt in topic_series.items():
                 records.append({"세부구분": topic, "기간": p, "건수": int(cnt)})
         hdf = pd.DataFrame(records)
@@ -4118,6 +4114,40 @@ def main():
     }
     section[data-testid="stSidebar"] div[data-testid="stTextInput"] button *,
     section[data-testid="stSidebar"] .stTextInput button * {
+        color:#0f172a !important;
+        fill:#0f172a !important;
+        stroke:#0f172a !important;
+        opacity:1 !important;
+    }
+    section[data-testid="stSidebar"] .stSelectbox label,
+    section[data-testid="stSidebar"] .stMultiSelect label,
+    section[data-testid="stSidebar"] .stTextInput label {
+        color:#ffffff !important;
+    }
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+    section[data-testid="stSidebar"] [data-baseweb="select"] > div > div,
+    section[data-testid="stSidebar"] .stSelectbox [data-baseweb="select"] > div,
+    section[data-testid="stSidebar"] .stMultiSelect [data-baseweb="select"] > div {
+        background:#ffffff !important;
+        color:#0f172a !important;
+        border:1px solid rgba(255,255,255,0.60) !important;
+        box-shadow:none !important;
+    }
+    section[data-testid="stSidebar"] [data-baseweb="select"] span,
+    section[data-testid="stSidebar"] [data-baseweb="select"] div,
+    section[data-testid="stSidebar"] [data-baseweb="select"] input {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+        caret-color:#0f172a !important;
+    }
+    section[data-testid="stSidebar"] [data-baseweb="tag"],
+    section[data-testid="stSidebar"] [data-baseweb="tag"] span,
+    section[data-testid="stSidebar"] [data-baseweb="tag"] div {
+        color:#0f172a !important;
+        -webkit-text-fill-color:#0f172a !important;
+        background:#eef2ff !important;
+    }
+    section[data-testid="stSidebar"] [data-baseweb="select"] svg {
         color:#0f172a !important;
         fill:#0f172a !important;
         stroke:#0f172a !important;
