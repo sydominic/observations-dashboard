@@ -1,0 +1,7 @@
+v10 changes
+- Fix default period: current KST quarter is selected on initial load when available.
+- Ignore stale query params/session-state values that forced 2026-1Q.
+- Hide row count from sidebar data source panel.
+- Keep upload timestamp but display it as KST.
+- Hide main dashboard header metadata block.
+- Dashboard calculation/classification/report logic otherwise preserved.

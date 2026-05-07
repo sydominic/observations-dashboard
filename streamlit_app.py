@@ -477,6 +477,43 @@ def _storage_config() -> dict[str, str]:
 def _storage_ready(cfg: dict[str, str]) -> bool:
     return bool(cfg.get("url") and cfg.get("key") and cfg.get("bucket") and cfg.get("object"))
 
+def _now_kst() -> datetime:
+    """Return current time in Korea Standard Time. Streamlit Cloud/Supabase often use UTC."""
+    return datetime.utcnow() + timedelta(hours=9)
+
+
+def _parse_datetime_loose(value: object) -> datetime | None:
+    s = str(value or "").strip()
+    if not s or s == "-":
+        return None
+    s = s.replace("(KST)", "").replace("KST", "").strip()
+    s = s.replace("Z", "")
+    try:
+        return datetime.fromisoformat(s)
+    except Exception:
+        pass
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _format_uploaded_at_kst(meta: dict | None) -> str:
+    """Display upload timestamp in KST. Older metadata uploaded_at is treated as server/UTC time."""
+    meta = meta or {}
+    explicit_kst = str(meta.get("uploaded_at_kst", "")).strip()
+    if explicit_kst:
+        return explicit_kst if "KST" in explicit_kst else explicit_kst + " KST"
+    dt_utc = _parse_datetime_loose(meta.get("uploaded_at_utc"))
+    if dt_utc:
+        return (dt_utc + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M:%S KST")
+    dt_old = _parse_datetime_loose(meta.get("uploaded_at"))
+    if dt_old:
+        return (dt_old + timedelta(hours=9)).strftime("%Y-%m-%d %H:%M:%S KST")
+    return "-"
+
 
 @st.cache_resource(show_spinner=False)
 def _get_supabase_client(url: str, key: str):
@@ -868,9 +905,7 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                 "최신 파일: "
                 + str(latest_meta.get("original_filename", "latest.xlsx"))
                 + "  \n업로드: "
-                + str(latest_meta.get("uploaded_at", "-"))
-                + "  \n행 수: "
-                + str(latest_meta.get("rows", "-"))
+                + _format_uploaded_at_kst(latest_meta)
             )
         else:
             st.sidebar.caption("Supabase 연결됨 · 아직 latest 메타정보 없음")
@@ -899,9 +934,13 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                     if st.button("업로드하고 latest.xlsx로 반영", type="primary", key="btn_upload_latest"):
                         if configured:
                             assignment_store, assignment_existing, assignment_new = _prepare_assignments_for_uploaded_df(check_df, cfg, new_file.name)
+                            now_utc = datetime.utcnow()
+                            now_kst = now_utc + timedelta(hours=9)
                             meta = {
                                 "original_filename": new_file.name,
-                                "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "uploaded_at": now_kst.strftime("%Y-%m-%d %H:%M:%S KST"),
+                                "uploaded_at_utc": now_utc.isoformat(timespec="seconds") + "Z",
+                                "uploaded_at_kst": now_kst.strftime("%Y-%m-%d %H:%M:%S KST"),
                                 "size_bytes": len(uploaded_bytes),
                                 "rows": int(len(check_df)),
                                 "sheets": check_sheets,
@@ -919,9 +958,13 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                         else:
                             assignment_store, assignment_existing, assignment_new = _prepare_assignments_for_uploaded_df(check_df, cfg, new_file.name)
                             st.session_state["latest_excel_override_bytes"] = uploaded_bytes
+                            now_utc = datetime.utcnow()
+                            now_kst = now_utc + timedelta(hours=9)
                             st.session_state["latest_excel_override_meta"] = {
                                 "original_filename": new_file.name,
-                                "uploaded_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                                "uploaded_at": now_kst.strftime("%Y-%m-%d %H:%M:%S KST"),
+                                "uploaded_at_utc": now_utc.isoformat(timespec="seconds") + "Z",
+                                "uploaded_at_kst": now_kst.strftime("%Y-%m-%d %H:%M:%S KST"),
                                 "size_bytes": len(uploaded_bytes),
                                 "rows": int(len(check_df)),
                                 "sheets": check_sheets,
@@ -1925,17 +1968,17 @@ def _render_global_period_selector(df: pd.DataFrame) -> tuple[str | None, list[s
         st.info("기간 데이터가 없습니다.")
         return None, []
 
-    qp_period = st.query_params.get("period") or st.query_params.get("mfg_period")
-    if isinstance(qp_period, list):
-        qp_period = qp_period[0] if qp_period else None
-
     default_period = _default_dashboard_period(period_opts)
-    if qp_period in period_opts:
-        default_period = qp_period
 
-    key = "selected_period_global_v9"
+    # v10: do not let stale query params or old browser session values force 1Q on initial load.
+    # The initial default is always current KST quarter when present; otherwise latest data quarter.
+    key = "selected_period_global_v10"
     if key not in st.session_state or st.session_state.get(key) not in period_opts:
         st.session_state[key] = default_period
+    # Clear stale legacy keys that could have preserved a previous 1Q value across deployments.
+    for legacy_key in ("selected_period_global_v9", "selected_period_main_tab", "selected_period_manufacturer_tab"):
+        if st.session_state.get(legacy_key) not in period_opts:
+            st.session_state.pop(legacy_key, None)
 
     top_cols = st.columns([7.0, 2.0])
     with top_cols[0]:
@@ -4111,15 +4154,7 @@ def main():
         log("엑셀 파일을 찾지 못했습니다.")
         st.warning("아직 최신 엑셀 데이터가 없습니다. 사이드바의 Admin Upload에서 엑셀을 업로드하십시오.")
         st.stop()
-    if source_label:
-        st.caption(f"현재 데이터 기준: {source_label}")
-    if latest_meta:
-        st.caption(
-            "업로드 파일: "
-            + str(latest_meta.get("original_filename", "latest.xlsx"))
-            + " · 업로드일시: "
-            + str(latest_meta.get("uploaded_at", "-"))
-        )
+    # Data source / upload metadata is intentionally hidden from the main dashboard header.
     selected_period, period_opts = _render_global_period_selector(df)
     w_base = apply_filters(df)
     w = filter_by_period(w_base, selected_period).copy() if selected_period else w_base.copy()
