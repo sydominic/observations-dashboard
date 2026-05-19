@@ -1141,98 +1141,159 @@ def _load_latest_admin_df(cfg: dict[str, str]) -> pd.DataFrame:
 
 
 def _render_pending_review_editor(cfg: dict[str, str], batch_id: str | None, admin_ok: bool) -> None:
-    if not admin_ok or not batch_id:
+    """Admin-only topic review/editor.
+
+    v19 change: show this panel whenever admin password is valid. Do not hide it
+    only because there is no pending row in the latest upload batch. The admin
+    can review pending rows or search any current Excel row and manually correct
+    its topic without asking for a code change.
+    """
+    if not admin_ok:
         return
+
+    st.markdown("#### 관리자 전용 분류 검토/수정")
+    st.caption("관리자 비밀번호가 맞을 때만 보입니다. 일반 조회 사용자는 수정할 수 없습니다.")
+
     store = _load_assignment_store(cfg)
-    rows = store.get("rows", {}) if isinstance(store, dict) else {}
+    rows = store.setdefault("rows", {}) if isinstance(store, dict) else {}
     if not isinstance(rows, dict):
-        return
-    pending_ids = []
-    for row_id, rec in rows.items():
-        if not isinstance(rec, dict) or not _is_assignment_pending(rec):
-            continue
-        rec_batch = str(rec.get("first_seen_batch", rec.get("last_seen_batch", "")))
-        if rec_batch == str(batch_id):
-            pending_ids.append(str(row_id))
-    if not pending_ids:
-        return
+        rows = {}
+        store["rows"] = rows
+
     df_latest = _load_latest_admin_df(cfg)
     if df_latest.empty or "_row_id" not in df_latest.columns:
-        st.caption("신규 검토 대상이 있으나 현재 엑셀 데이터를 불러오지 못했습니다.")
+        st.caption("현재 엑셀 데이터를 불러오지 못해 분류 편집기를 표시할 수 없습니다.")
         return
-    view = df_latest[df_latest["_row_id"].isin(pending_ids)].copy()
-    if view.empty:
-        st.caption("이번 업로드 신규분 row_id와 현재 엑셀 행이 일치하지 않습니다.")
-        return
-    topic_options = _topic_options()
-    editor_rows = []
-    for _, row in view.iterrows():
+
+    # Ensure visible current topic/status for each row.
+    def _topic_for_row(row) -> str:
         rid = str(row.get("_row_id", ""))
         rec = rows.get(rid, {}) if isinstance(rows.get(rid, {}), dict) else {}
-        current_topic = str(rec.get("topic", "")).strip() or infer_topic_from_row(row)
-        editor_rows.append({
-            "row_id": rid,
-            "등록월": _clean_identity_value(row.get("등록월", "")),
-            "제조업체명": _clean_identity_value(row.get("제조업체명", "")),
-            "감시분야": _clean_identity_value(row.get("감시분야", "")),
-            "등급": _clean_identity_value(row.get("등급", "")),
-            "지적사항 요약": _clean_identity_value(row.get("지적사항 요약", "")),
-            "현재분류": current_topic,
-            "수정분류": current_topic,
-        })
-    editor_df = pd.DataFrame(editor_rows)
-    st.markdown("#### 신규/미확정 분류 검토")
-    st.caption("관리자만 수정할 수 있습니다. 수정 저장 후 확정하면 해당 row_id가 잠기고, 수정 패턴은 다음 신규 행 분류에 학습됩니다.")
-    edited = st.data_editor(
-        editor_df,
-        key=f"pending_topic_editor_{batch_id}",
-        hide_index=True,
-        use_container_width=True,
-        disabled=["row_id", "등록월", "제조업체명", "감시분야", "등급", "지적사항 요약", "현재분류"],
-        column_config={
-            "row_id": None,
-            "지적사항 요약": st.column_config.TextColumn("지적사항 요약", width="large"),
-            "현재분류": st.column_config.TextColumn("현재분류", width="medium"),
-            "수정분류": st.column_config.SelectboxColumn("수정분류", options=topic_options, required=True, width="medium"),
-        },
+        topic = str(rec.get("topic", "")).strip()
+        if topic:
+            return topic
+        return infer_topic_from_row(row)
+
+    def _status_for_row(row) -> str:
+        rid = str(row.get("_row_id", ""))
+        rec = rows.get(rid, {}) if isinstance(rows.get(rid, {}), dict) else {}
+        return _assignment_status(rec) or "untracked"
+
+    view = df_latest.copy()
+    view["_current_topic"] = view.apply(_topic_for_row, axis=1)
+    view["_assignment_status_view"] = view.apply(_status_for_row, axis=1)
+
+    mode = st.radio(
+        "검토 범위",
+        ["신규/미확정", "전체 검색/수정"],
+        horizontal=False,
+        key="admin_topic_review_mode_v19",
     )
-    if st.button("수정분류 저장", key=f"save_pending_topic_edits_{batch_id}", type="secondary"):
+
+    search_kw = st.text_input(
+        "분류 수정 검색어",
+        value="",
+        placeholder="회사명/지적사항/세부구분 일부 입력",
+        key="admin_topic_review_search_v19",
+    ).strip()
+
+    if mode == "신규/미확정":
+        pending_ids = set()
+        for rid, rec in rows.items():
+            if isinstance(rec, dict) and _is_assignment_pending(rec):
+                pending_ids.add(str(rid))
+        candidates = view[view["_row_id"].astype(str).isin(pending_ids)].copy()
+        if search_kw:
+            hay = candidates[[c for c in ["제조업체명", "감시분야", "등급", "지적사항 요약", "_current_topic"] if c in candidates.columns]].astype(str).agg(" ".join, axis=1)
+            candidates = candidates[hay.str.contains(re.escape(search_kw), case=False, na=False)].copy()
+        if candidates.empty:
+            st.caption("신규/미확정 항목이 없거나 검색 결과가 없습니다. 전체 검색/수정에서 특정 행을 찾아 수정할 수 있습니다.")
+            return
+    else:
+        if not search_kw:
+            st.caption("전체 검색/수정은 오수정 방지를 위해 검색어 입력 후 표시됩니다.")
+            return
+        hay_cols = [c for c in ["등록월", "제조업체명", "감시분야", "등급", "지적사항 요약", "_current_topic"] if c in view.columns]
+        hay = view[hay_cols].astype(str).agg(" ".join, axis=1)
+        candidates = view[hay.str.contains(re.escape(search_kw), case=False, na=False)].copy()
+        if candidates.empty:
+            st.caption("검색 결과가 없습니다.")
+            return
+
+    # Limit options for UI stability in the narrow sidebar.
+    candidates = candidates.head(100).copy()
+    option_map = {}
+    labels = []
+    for _, row in candidates.iterrows():
+        rid = str(row.get("_row_id", ""))
+        company = _clean_identity_value(row.get("제조업체명", ""))
+        date = _clean_identity_value(row.get("등록월", row.get("실사기간", "")))
+        topic = _clean_identity_value(row.get("_current_topic", ""))
+        summary = _clean_identity_value(row.get("지적사항 요약", ""))
+        summary_short = summary[:65] + ("..." if len(summary) > 65 else "")
+        label = f"{date} | {company} | {topic} | {summary_short}"
+        # Avoid duplicate labels overwriting.
+        if label in option_map:
+            label = f"{label} [{rid[:6]}]"
+        option_map[label] = rid
+        labels.append(label)
+
+    selected_label = st.selectbox("수정할 지적사항", labels, key="admin_topic_row_select_v19")
+    selected_rid = option_map.get(selected_label, "")
+    selected_rows = candidates[candidates["_row_id"].astype(str) == selected_rid]
+    if selected_rows.empty:
+        return
+    row = selected_rows.iloc[0]
+    rec = rows.get(selected_rid, {}) if isinstance(rows.get(selected_rid, {}), dict) else {}
+    current_topic = str(rec.get("topic", "")).strip() or str(row.get("_current_topic", "")).strip()
+    status = _assignment_status(rec) or "untracked"
+
+    st.caption(f"현재상태: {status} / 현재분류: {current_topic}")
+    with st.expander("선택 행 요약", expanded=False):
+        st.write("제조업체명: " + _clean_identity_value(row.get("제조업체명", "")))
+        st.write("감시분야: " + _clean_identity_value(row.get("감시분야", "")))
+        st.write("등급: " + _clean_identity_value(row.get("등급", "")))
+        st.write("지적사항: " + _clean_identity_value(row.get("지적사항 요약", "")))
+
+    topic_options = _topic_options()
+    if current_topic and current_topic not in topic_options:
+        topic_options = [current_topic] + topic_options
+    default_idx = topic_options.index(current_topic) if current_topic in topic_options else 0
+    new_topic = st.selectbox("수정분류", topic_options, index=default_idx, key="admin_topic_new_topic_v19")
+
+    if st.button("선택 항목 분류 저장", key="btn_save_single_topic_edit_v19", type="secondary"):
         if not admin_ok:
             st.error("관리자 권한이 없어 수정할 수 없습니다.")
             return
-        latest_by_id = {str(r.get("_row_id", "")): r for _, r in view.iterrows()}
-        changed = 0
-        learned = 0
+        new_topic = str(new_topic).strip()
+        if not selected_rid or not new_topic:
+            st.error("수정할 항목 또는 수정분류가 없습니다.")
+            return
+        if new_topic == current_topic and status in CONFIRMED_ASSIGNMENT_STATUSES:
+            st.info("이미 같은 분류로 확정된 항목입니다.")
+            return
         now = _now_kst().strftime("%Y-%m-%d %H:%M:%S KST")
-        for _, erow in edited.iterrows():
-            rid = str(erow.get("row_id", "")).strip()
-            new_topic = str(erow.get("수정분류", "")).strip()
-            old_topic = str(erow.get("현재분류", "")).strip()
-            if not rid or not new_topic or new_topic == old_topic:
-                continue
-            rec = rows.get(rid, {}) if isinstance(rows.get(rid, {}), dict) else {}
-            if _is_assignment_confirmed(rec):
-                continue
-            rec["topic"] = new_topic
-            rec["status"] = "pending_review"
-            rec["locked"] = False
-            rec["source"] = "admin_manual_edit_pending"
-            rec["manual_edited_at"] = now
-            rec["manual_edited_by"] = "admin_upload"
-            rec["last_seen_batch"] = batch_id
-            rows[rid] = rec
-            changed += 1
-            row_rec = latest_by_id.get(rid)
-            if row_rec is not None and _queue_runtime_learning_rule(cfg, row_rec, new_topic, batch_id, rid):
-                learned += 1
-        if changed:
-            store["last_manual_edit_batch_id"] = batch_id
-            store["last_manual_edit_count"] = int(changed)
-            _save_assignment_store(cfg, store)
-            st.success(f"수정분류 {changed:,}건을 저장했습니다. 학습 후보 {learned:,}건도 저장했습니다. 확정 버튼을 눌러 잠금 처리하십시오.")
-            st.rerun()
-        else:
-            st.info("변경된 수정분류가 없습니다.")
+        batch_for_edit = str(batch_id or store.get("last_upload_batch_id", "") or _make_upload_batch_id())
+        old_rec = rows.get(selected_rid, {}) if isinstance(rows.get(selected_rid, {}), dict) else {}
+        if not old_rec:
+            old_rec = _build_assignment_record(row, new_topic, "admin_manual_edit", filename=str((st.session_state.get("latest_meta", {}) or {}).get("original_filename", "")), status="manual_confirmed", batch_id=batch_for_edit)
+        old_rec.update({
+            "topic": new_topic,
+            "status": "manual_confirmed",
+            "locked": True,
+            "source": "admin_manual_edit",
+            "manual_edited_at": now,
+            "manual_edited_by": "admin_upload",
+            "last_seen_batch": batch_for_edit,
+        })
+        rows[selected_rid] = old_rec
+        store["last_manual_edit_batch_id"] = batch_for_edit
+        store["last_manual_edit_row_id"] = selected_rid
+        store["last_manual_edit_topic"] = new_topic
+        _save_assignment_store(cfg, store)
+        _queue_runtime_learning_rule(cfg, row, new_topic, batch_for_edit, selected_rid)
+        st.success("선택 항목의 분류를 저장하고 manual_confirmed로 확정했습니다. 학습 후보도 저장했습니다.")
+        st.rerun()
 
 
 def _build_assignment_record(row, topic: str, source: str, filename: str = "", status: str = "pending_review", batch_id: str = "") -> dict:
@@ -1449,7 +1510,6 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                     pending_for_batch = 0
                 if pending_for_batch > 0:
                     st.caption(f"관리자 검토 대기 신규분: {pending_for_batch:,}건")
-                    _render_pending_review_editor(cfg, confirm_batch_id, admin_ok)
                     if st.button("이번 업로드 신규분 분류 확정", key="btn_confirm_pending_upload", type="secondary"):
                         confirmed_count = _confirm_pending_assignments_for_batch(cfg, confirm_batch_id)
                         if confirmed_count > 0:
@@ -1458,6 +1518,9 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                             st.rerun()
                         else:
                             st.info("확정할 신규 검토 대기 항목이 없습니다.")
+                else:
+                    st.caption("이번 업로드 기준 신규 검토 대기 항목은 없습니다. 필요한 경우 아래 분류 검토/수정에서 전체 검색으로 수정할 수 있습니다.")
+            _render_pending_review_editor(cfg, confirm_batch_id, admin_ok)
 
             new_file = st.file_uploader("최신 GMP 실태조사 엑셀 업로드", type=["xlsx"], key="admin_latest_xlsx")
             if new_file is not None:

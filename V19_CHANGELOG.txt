@@ -1,0 +1,7 @@
+v19 - Admin topic editor always visible after authentication
+
+- Admin password OK이면 Admin Upload 내부에 분류 검토/수정 패널을 항상 표시합니다.
+- 신규/미확정 항목 보기와 전체 검색/수정 모드를 제공합니다.
+- 선택 행의 세부구분을 직접 수정하면 manual_confirmed로 저장됩니다.
+- 수정값은 topic_assignments.json에 저장되고 학습 후보는 topic_learning_rules_runtime.json에 저장됩니다.
+- 일반 사용자는 해당 UI를 볼 수 없고 저장 로직도 실행할 수 없습니다.
