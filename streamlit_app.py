@@ -571,10 +571,43 @@ def _storage_upload_bytes(cfg: dict[str, str], object_name: str, data: bytes, co
             raise RuntimeError(f"Supabase upload failed: {first_exc} / update failed: {second_exc}")
 
 
+def _make_upload_batch_id() -> str:
+    return _now_kst().strftime("%Y%m%d_%H%M%S")
+
+
+CONFIRMED_ASSIGNMENT_STATUSES = {"confirmed", "manual_confirmed", "legacy_confirmed"}
+PENDING_ASSIGNMENT_STATUSES = {"pending_review", "auto_pending", "py_auto_pending"}
+
+
+def _assignment_status(rec: dict | str | None) -> str:
+    if isinstance(rec, dict):
+        status = str(rec.get("status", "")).strip()
+        if status:
+            return status
+        source = str(rec.get("source", "")).strip().lower()
+        locked = rec.get("locked", None)
+        if source.startswith("manual"):
+            return "manual_confirmed"
+        if locked is True:
+            return "legacy_confirmed"
+        return "pending_review"
+    if rec:
+        return "legacy_confirmed"
+    return ""
+
+
+def _is_assignment_confirmed(rec: dict | str | None) -> bool:
+    return _assignment_status(rec) in CONFIRMED_ASSIGNMENT_STATUSES
+
+
+def _is_assignment_pending(rec: dict | str | None) -> bool:
+    return _assignment_status(rec) in PENDING_ASSIGNMENT_STATUSES
+
+
 # ---------------------------------------------------------------------
 # Persistent topic learning / row-level assignment
 # ---------------------------------------------------------------------
-ASSIGNMENT_SCHEMA_VERSION = "1.0"
+ASSIGNMENT_SCHEMA_VERSION = "1.1"
 ROW_ID_FIELDS = [
     "등록월",
     "제조업체명",
@@ -750,6 +783,28 @@ def _empty_assignment_store() -> dict:
     }
 
 
+def _normalize_assignment_record(rec) -> dict:
+    if isinstance(rec, dict):
+        out = dict(rec)
+        out["topic"] = str(out.get("topic", "")).strip()
+    else:
+        out = {"topic": str(rec or "").strip(), "source": "legacy_mapping"}
+    status = _assignment_status(out)
+    if status == "legacy_confirmed" and not str(out.get("status", "")).strip():
+        out["status"] = "legacy_confirmed"
+        out["locked"] = True
+    elif status == "manual_confirmed":
+        out["status"] = "manual_confirmed"
+        out["locked"] = True
+    elif status in CONFIRMED_ASSIGNMENT_STATUSES:
+        out["status"] = status
+        out["locked"] = True
+    else:
+        out["status"] = "pending_review"
+        out["locked"] = False
+    return out
+
+
 def _normalize_assignment_store(raw) -> dict:
     if not isinstance(raw, dict):
         return _empty_assignment_store()
@@ -761,20 +816,21 @@ def _normalize_assignment_store(raw) -> dict:
         for k, v in raw.items():
             if not isinstance(k, str):
                 continue
-            if isinstance(v, dict):
-                topic = str(v.get("topic", "")).strip()
-                rec = dict(v)
-                rec.setdefault("topic", topic)
-            else:
-                topic = str(v).strip()
-                rec = {"topic": topic, "source": "legacy_mapping"}
-            if topic:
+            rec = _normalize_assignment_record(v)
+            if rec.get("topic"):
                 rows[k] = rec
         store = _empty_assignment_store()
         store["rows"] = rows
     store.setdefault("schema_version", ASSIGNMENT_SCHEMA_VERSION)
     store.setdefault("updated_at", "")
     store.setdefault("rows", {})
+    if isinstance(store.get("rows"), dict):
+        normalized_rows = {}
+        for k, v in store["rows"].items():
+            rec = _normalize_assignment_record(v)
+            if str(k) and rec.get("topic"):
+                normalized_rows[str(k)] = rec
+        store["rows"] = normalized_rows
     return store
 
 
@@ -793,6 +849,28 @@ def _assignment_topic_map(store: dict) -> dict[str, str]:
     return out
 
 
+def _assignment_status_map(store: dict) -> dict[str, str]:
+    rows = store.get("rows", {}) if isinstance(store, dict) else {}
+    out: dict[str, str] = {}
+    if not isinstance(rows, dict):
+        return out
+    for row_id, rec in rows.items():
+        if row_id:
+            out[str(row_id)] = _assignment_status(rec)
+    return out
+
+
+def _assignment_record_map(store: dict) -> dict[str, dict]:
+    rows = store.get("rows", {}) if isinstance(store, dict) else {}
+    out: dict[str, dict] = {}
+    if not isinstance(rows, dict):
+        return out
+    for row_id, rec in rows.items():
+        if row_id and isinstance(rec, dict):
+            out[str(row_id)] = rec
+    return out
+
+
 def _load_assignment_store(cfg: dict[str, str]) -> dict:
     object_name = cfg.get("assignments_object", "topic_assignments.json")
     raw = _storage_download_json(cfg, object_name) if _storage_ready(cfg) else {}
@@ -803,20 +881,25 @@ def _load_assignment_store(cfg: dict[str, str]) -> dict:
 
 def _save_assignment_store(cfg: dict[str, str], store: dict) -> None:
     store = _normalize_assignment_store(store)
-    store["updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    store["updated_at"] = _now_kst().strftime("%Y-%m-%d %H:%M:%S KST")
     payload = json.dumps(store, ensure_ascii=False, indent=2).encode("utf-8")
     if _storage_ready(cfg):
         _storage_upload_bytes(cfg, cfg.get("assignments_object", "topic_assignments.json"), payload, "application/json; charset=utf-8")
     st.session_state["topic_assignments_store"] = store
     st.session_state["topic_assignments_map"] = _assignment_topic_map(store)
+    st.session_state["topic_assignments_status_map"] = _assignment_status_map(store)
+    st.session_state["topic_assignments_record_map"] = _assignment_record_map(store)
 
 
-def _build_assignment_record(row, topic: str, source: str, filename: str = "") -> dict:
+def _build_assignment_record(row, topic: str, source: str, filename: str = "", status: str = "pending_review", batch_id: str = "") -> dict:
+    status = status or "pending_review"
     return {
         "topic": str(topic).strip(),
-        "locked": True,
+        "status": status,
+        "locked": status in CONFIRMED_ASSIGNMENT_STATUSES,
         "source": source,
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "created_at": _now_kst().strftime("%Y-%m-%d %H:%M:%S KST"),
+        "first_seen_batch": batch_id,
         "filename": filename,
         "등록월": _clean_identity_value(row.get("등록월", "")),
         "제조업체명": _clean_identity_value(row.get("제조업체명", "")),
@@ -837,17 +920,23 @@ def _apply_persistent_topic_assignments(df: pd.DataFrame, cfg: dict[str, str]) -
     out["_row_id"] = out.apply(make_observation_row_id, axis=1)
     store = _load_assignment_store(cfg)
     topic_map = _assignment_topic_map(store)
+    status_map = _assignment_status_map(store)
+    record_map = _assignment_record_map(store)
     st.session_state["topic_assignments_store"] = store
     st.session_state["topic_assignments_map"] = topic_map
+    st.session_state["topic_assignments_status_map"] = status_map
+    st.session_state["topic_assignments_record_map"] = record_map
     out["확정주제그룹"] = out["_row_id"].map(topic_map).fillna("")
+    out["_assignment_status"] = out["_row_id"].map(status_map).fillna("")
     return out
 
 
-def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, str], filename: str) -> tuple[dict, int, int]:
-    """Freeze existing rows and classify only newly seen rows.
+def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, str], filename: str, batch_id: str | None = None) -> tuple[dict, int, int, int]:
+    """Classify newly seen rows as pending_review and keep confirmed rows locked.
 
-    This runs only inside Admin Upload. The counts are kept in meta/session for
-    admin tracing but are not displayed on the public dashboard.
+    Existing confirmed/manual_confirmed rows are never reclassified. Existing
+    pending_review rows may be re-evaluated when PY rules are upgraded. New rows
+    are saved as pending_review until an authenticated admin confirms the upload.
     """
     store = _load_assignment_store(cfg)
     rows = store.setdefault("rows", {})
@@ -856,8 +945,10 @@ def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, 
         rows = {}
         store["rows"] = rows
 
+    batch_id = batch_id or _make_upload_batch_id()
     added = 0
-    updated = 0
+    updated_pending = 0
+
     for _, row in check_df.iterrows():
         if not is_real_finding(row.get("지적사항 요약", "")):
             continue
@@ -868,23 +959,79 @@ def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, 
             row.get("1차 구분", ""),
             row.get("2차 구분 (참고)", ""),
         )
+        topic = priority_topic or _infer_topic_from_row_base(row) or "세부 항목 관리"
+
         if row_id in rows:
-            # Existing row_id must be treated as already confirmed/frozen.
-            # Do NOT reclassify old rows when PY rules are upgraded.
-            # New PY priority rules are applied only to newly seen row_id values.
+            rec = _normalize_assignment_record(rows[row_id])
+            if _is_assignment_confirmed(rec):
+                rows[row_id] = rec
+                continue
+            # pending_review is intentionally re-evaluated when the PY rules improve.
+            old_topic = str(rec.get("topic", "")).strip()
+            rec.update({
+                "topic": topic,
+                "status": "pending_review",
+                "locked": False,
+                "source": "py_auto_pending",
+                "updated_at": _now_kst().strftime("%Y-%m-%d %H:%M:%S KST"),
+                "last_seen_batch": batch_id,
+                "filename": filename,
+            })
+            rows[row_id] = rec
+            if old_topic != topic:
+                updated_pending += 1
             continue
-        # For a new row only, use priority PY rules first, then the existing engine once and freeze the result.
-        topic = priority_topic or _infer_topic_from_row_base(row)
-        if not topic:
-            topic = "세부 항목 관리"
-        rows[row_id] = _build_assignment_record(row, topic, "auto_new_upload_v8", filename)
+
+        rows[row_id] = _build_assignment_record(row, topic, "py_auto_pending", filename, status="pending_review", batch_id=batch_id)
         added += 1
 
-    if updated:
-        store["last_auto_corrected"] = int(updated)
+    store["last_upload_batch_id"] = batch_id
+    store["last_upload_filename"] = filename
+    store["last_pending_added"] = int(added)
+    store["last_pending_reclassified"] = int(updated_pending)
     _save_assignment_store(cfg, store)
-    return store, before_count, added
+    pending_count = _count_pending_for_batch(store, batch_id)
+    return store, before_count, added, pending_count
 
+
+def _count_pending_for_batch(store: dict, batch_id: str | None = None) -> int:
+    rows = store.get("rows", {}) if isinstance(store, dict) else {}
+    if not isinstance(rows, dict):
+        return 0
+    n = 0
+    for rec in rows.values():
+        if not isinstance(rec, dict) or not _is_assignment_pending(rec):
+            continue
+        if batch_id and str(rec.get("first_seen_batch", rec.get("last_seen_batch", ""))) != str(batch_id):
+            continue
+        n += 1
+    return n
+
+
+def _confirm_pending_assignments_for_batch(cfg: dict[str, str], batch_id: str) -> int:
+    store = _load_assignment_store(cfg)
+    rows = store.setdefault("rows", {})
+    if not isinstance(rows, dict):
+        return 0
+    confirmed = 0
+    now = _now_kst().strftime("%Y-%m-%d %H:%M:%S KST")
+    for row_id, rec in list(rows.items()):
+        if not isinstance(rec, dict) or not _is_assignment_pending(rec):
+            continue
+        rec_batch = str(rec.get("first_seen_batch", rec.get("last_seen_batch", "")))
+        if str(batch_id) and rec_batch != str(batch_id):
+            continue
+        rec["status"] = "confirmed"
+        rec["locked"] = True
+        rec["confirmed_at"] = now
+        rec["confirmed_by"] = "admin_upload"
+        rows[row_id] = rec
+        confirmed += 1
+    if confirmed:
+        store["last_confirmed_batch_id"] = batch_id
+        store["last_confirmed_count"] = int(confirmed)
+        _save_assignment_store(cfg, store)
+    return confirmed
 
 
 def _validate_uploaded_workbook(uploaded_bytes: bytes) -> tuple[pd.DataFrame, list[str]]:
@@ -933,6 +1080,27 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
         elif admin_pw and not admin_ok:
             st.error("관리자 비밀번호가 맞지 않습니다.")
         if admin_ok:
+            confirm_batch_id = (
+                st.session_state.get("last_admin_upload_batch_id")
+                or str((latest_meta or {}).get("upload_batch_id", "")).strip()
+            )
+            if confirm_batch_id:
+                try:
+                    admin_store = _load_assignment_store(cfg)
+                    pending_for_batch = _count_pending_for_batch(admin_store, confirm_batch_id)
+                except Exception:
+                    pending_for_batch = 0
+                if pending_for_batch > 0:
+                    st.caption(f"관리자 검토 대기 신규분: {pending_for_batch:,}건")
+                    if st.button("이번 업로드 신규분 분류 확정", key="btn_confirm_pending_upload", type="secondary"):
+                        confirmed_count = _confirm_pending_assignments_for_batch(cfg, confirm_batch_id)
+                        if confirmed_count > 0:
+                            st.success(f"이번 업로드 신규분 {confirmed_count:,}건을 확정했습니다.")
+                            st.session_state["last_admin_upload_pending_count"] = 0
+                            st.rerun()
+                        else:
+                            st.info("확정할 신규 검토 대기 항목이 없습니다.")
+
             new_file = st.file_uploader("최신 GMP 실태조사 엑셀 업로드", type=["xlsx"], key="admin_latest_xlsx")
             if new_file is not None:
                 uploaded_bytes = new_file.getvalue()
@@ -941,7 +1109,8 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                     st.success(f"업로드 전 검증 완료: {len(check_df):,}행 / 시트 {len(check_sheets)}개")
                     if st.button("업로드하고 latest.xlsx로 반영", type="primary", key="btn_upload_latest"):
                         if configured:
-                            assignment_store, assignment_existing, assignment_new = _prepare_assignments_for_uploaded_df(check_df, cfg, new_file.name)
+                            batch_id = _make_upload_batch_id()
+                            assignment_store, assignment_existing, assignment_new, assignment_pending = _prepare_assignments_for_uploaded_df(check_df, cfg, new_file.name, batch_id)
                             now_utc = datetime.utcnow()
                             now_kst = now_utc + timedelta(hours=9)
                             meta = {
@@ -955,16 +1124,22 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                                 "assignment_existing_rows": int(assignment_existing),
                                 "assignment_new_rows": int(assignment_new),
                                 "assignments_object": cfg.get("assignments_object", "topic_assignments.json"),
+                                "upload_batch_id": batch_id,
+                                "assignment_pending_rows": int(assignment_pending),
+                                "assignment_status": "pending_review" if assignment_pending else "no_new_pending",
                             }
                             _storage_upload_bytes(cfg, cfg["object"], uploaded_bytes, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
                             _storage_upload_bytes(cfg, cfg["meta_object"], json.dumps(meta, ensure_ascii=False, indent=2).encode("utf-8"), "application/json; charset=utf-8")
                             st.session_state["latest_excel_override_bytes"] = uploaded_bytes
                             st.session_state["latest_excel_override_meta"] = meta
+                            st.session_state["last_admin_upload_batch_id"] = batch_id
+                            st.session_state["last_admin_upload_pending_count"] = int(assignment_pending)
                             load_workbook.clear()
                             st.success("Supabase Storage의 latest.xlsx와 topic_assignments.json을 갱신했습니다. 화면을 다시 불러옵니다.")
                             st.rerun()
                         else:
-                            assignment_store, assignment_existing, assignment_new = _prepare_assignments_for_uploaded_df(check_df, cfg, new_file.name)
+                            batch_id = _make_upload_batch_id()
+                            assignment_store, assignment_existing, assignment_new, assignment_pending = _prepare_assignments_for_uploaded_df(check_df, cfg, new_file.name, batch_id)
                             st.session_state["latest_excel_override_bytes"] = uploaded_bytes
                             now_utc = datetime.utcnow()
                             now_kst = now_utc + timedelta(hours=9)
@@ -979,7 +1154,12 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                                 "storage": "session_only",
                                 "assignment_existing_rows": int(assignment_existing),
                                 "assignment_new_rows": int(assignment_new),
+                                "upload_batch_id": batch_id,
+                                "assignment_pending_rows": int(assignment_pending),
+                                "assignment_status": "pending_review" if assignment_pending else "no_new_pending",
                             }
+                            st.session_state["last_admin_upload_batch_id"] = batch_id
+                            st.session_state["last_admin_upload_pending_count"] = int(assignment_pending)
                             load_workbook.clear()
                             st.warning("Supabase 미설정 상태라 현재 세션에만 임시 반영했습니다.")
                             st.rerun()
@@ -1838,12 +2018,8 @@ def _infer_topic_from_row_base(row) -> str:
 
 
 def infer_topic_from_row(row) -> str:
-    # 0) Existing confirmed row_id wins. This preserves previously reviewed classifications
-    #    even when PY rules are upgraded for new observations.
-    fixed_topic = str(row.get("확정주제그룹", "")).strip()
-    if fixed_topic:
-        return fixed_topic
-
+    # 0) Confirmed/manual-confirmed row_id wins. Pending rows are intentionally
+    #    re-evaluated so upgraded PY rules can correct unreviewed auto results.
     row_id = str(row.get("_row_id", "")).strip()
     if not row_id:
         try:
@@ -1852,12 +2028,13 @@ def infer_topic_from_row(row) -> str:
             row_id = ""
     if row_id:
         topic_map = st.session_state.get("topic_assignments_map", {})
-        if isinstance(topic_map, dict):
-            topic = str(topic_map.get(row_id, "")).strip()
-            if topic:
-                return topic
+        status_map = st.session_state.get("topic_assignments_status_map", {})
+        topic = str(topic_map.get(row_id, "")).strip() if isinstance(topic_map, dict) else ""
+        status = str(status_map.get(row_id, "")).strip() if isinstance(status_map, dict) else ""
+        if topic and status in CONFIRMED_ASSIGNMENT_STATUSES:
+            return topic
 
-    # 1) New row only: upgraded PY priority rules run before the base engine.
+    # 1) New or pending_review row: upgraded PY priority rules run before the base engine.
     priority_topic = _priority_topic_override_v7(
         row.get("감시분야", ""),
         row.get("지적사항 요약", ""),
@@ -1867,7 +2044,7 @@ def infer_topic_from_row(row) -> str:
     if priority_topic:
         return priority_topic
 
-    # 2) Fallback for new rows: use the current built-in/JSON topic engine.
+    # 2) Fallback for new/pending rows: use the current built-in/JSON topic engine.
     return _infer_topic_from_row_base(row)
 
 

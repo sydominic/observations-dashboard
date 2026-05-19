@@ -1,0 +1,23 @@
+GMP Dashboard v17 - Admin-only pending review confirmation
+
+반영 내용
+1. topic_assignments.json에 status 개념 도입
+   - pending_review: 신규 자동분류, 관리자 검토 전
+   - confirmed: 관리자 확정 완료
+   - manual_confirmed: 수동 확정값
+   - legacy_confirmed: 과거 저장값 보호
+
+2. 기존 확인 완료/legacy 분류 보호
+   - confirmed/manual_confirmed/legacy_confirmed는 PY 규칙 업그레이드 시에도 재분류하지 않음
+
+3. 신규 row_id만 pending_review로 저장
+   - 신규 행은 자동분류 후 pending_review 상태로 저장
+   - pending_review 행은 향후 PY 규칙 개선 시 재평가 가능
+
+4. 관리자 전용 확정 버튼 추가
+   - Admin Upload 영역에서 관리자 비밀번호가 맞을 때만 표시
+   - 업로드 batch에 pending_review 신규분이 있을 때만 표시
+   - 버튼명: 이번 업로드 신규분 분류 확정
+
+5. 일반 대시보드 화면 영향 없음
+   - 신규 건수, pending 상태, 확정 버튼은 일반 화면에 표시하지 않음
