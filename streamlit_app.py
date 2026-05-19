@@ -891,6 +891,350 @@ def _save_assignment_store(cfg: dict[str, str], store: dict) -> None:
     st.session_state["topic_assignments_record_map"] = _assignment_record_map(store)
 
 
+RUNTIME_RULE_SCHEMA_VERSION = "1.0"
+GENERIC_LEARNING_TOKENS = {
+    "자료", "제출", "추가", "설명", "관련", "관리", "절차", "기준", "사항", "확인", "작성", "실시", "검토",
+    "해당", "대한", "하여", "에서", "으로", "것", "있음", "없음", "보완", "문서", "기록", "방법", "내용"
+}
+DOMAIN_LEARNING_PHRASES = [
+    "오염관리전략", "contamination control strategy", "ccs",
+    "자율점검", "자체실사", "자율점검 실시자",
+    "직접포장", "직접 포장", "외부용기", "외부 용기", "기재사항", "표시사항", "표시재료", "라벨",
+    "제조설비세척", "제조설비 세척", "설비세척", "장비세척", "간이세척", "세척 밸리데이션",
+    "멸균공정", "멸균 공정", "멸균공정주기", "적재유형", "적재 패턴", "멸균기", "오토클레이브", "autoclave", "sterilizer",
+    "제균여과필터", "제균여과", "무균여과", "멸균여과", "filter integrity", "필터 완전성",
+    "시험방법", "시스템적합성", "시험결과", "검체", "엔도톡신", "품질평가", "반복불만", "교육훈련", "밸리데이션종합계획"
+]
+
+
+def _empty_runtime_learning_store() -> dict:
+    return {
+        "schema_version": RUNTIME_RULE_SCHEMA_VERSION,
+        "updated_at": "",
+        "rules": [],
+        "notes": "관리자 수정으로 생성된 자동학습 규칙입니다. 일반 대시보드에는 표시하지 않습니다.",
+    }
+
+
+def _normalize_runtime_learning_store(raw) -> dict:
+    if not isinstance(raw, dict):
+        return _empty_runtime_learning_store()
+    store = dict(raw)
+    store.setdefault("schema_version", RUNTIME_RULE_SCHEMA_VERSION)
+    store.setdefault("updated_at", "")
+    rules = store.get("rules", [])
+    normalized = []
+    if isinstance(rules, list):
+        for item in rules:
+            if not isinstance(item, dict):
+                continue
+            topic = str(item.get("topic", "")).strip()
+            if not topic:
+                continue
+            keywords = item.get("keywords", [])
+            if isinstance(keywords, str):
+                keywords = [keywords]
+            if not isinstance(keywords, list):
+                keywords = []
+            cleaned_keywords = []
+            for kw in keywords:
+                kw = str(kw or "").strip()
+                if not kw:
+                    continue
+                if kw not in cleaned_keywords:
+                    cleaned_keywords.append(kw)
+            if not cleaned_keywords:
+                continue
+            rec = dict(item)
+            rec["topic"] = topic
+            rec["keywords"] = cleaned_keywords
+            rec["field"] = normalize_field(str(rec.get("field", "")).strip()) if rec.get("field") else ""
+            rec["status"] = str(rec.get("status", "active")).strip() or "active"
+            rec["match"] = str(rec.get("match", "any")).strip() or "any"
+            try:
+                rec["priority"] = int(rec.get("priority", 80))
+            except Exception:
+                rec["priority"] = 80
+            normalized.append(rec)
+    store["rules"] = normalized
+    return store
+
+
+def _load_runtime_learning_store(cfg: dict[str, str]) -> dict:
+    object_name = cfg.get("runtime_rules_object", "topic_learning_rules_runtime.json")
+    raw = _storage_download_json(cfg, object_name) if _storage_ready(cfg) else {}
+    if not raw:
+        raw = st.session_state.get("runtime_topic_learning_store", {})
+    store = _normalize_runtime_learning_store(raw)
+    st.session_state["runtime_topic_learning_store"] = store
+    return store
+
+
+def _save_runtime_learning_store(cfg: dict[str, str], store: dict) -> None:
+    store = _normalize_runtime_learning_store(store)
+    store["updated_at"] = _now_kst().strftime("%Y-%m-%d %H:%M:%S KST")
+    payload = json.dumps(store, ensure_ascii=False, indent=2).encode("utf-8")
+    if _storage_ready(cfg):
+        _storage_upload_bytes(cfg, cfg.get("runtime_rules_object", "topic_learning_rules_runtime.json"), payload, "application/json; charset=utf-8")
+    st.session_state["runtime_topic_learning_store"] = store
+
+
+def _runtime_topic_override(field: str, summary: str, ref1: str = "", ref2: str = "") -> str:
+    store = st.session_state.get("runtime_topic_learning_store", {})
+    rules = store.get("rules", []) if isinstance(store, dict) else []
+    if not isinstance(rules, list) or not rules:
+        return ""
+    text = _normalize_topic_text(f"{summary} {ref1} {ref2}")
+    field_norm = normalize_field(field)
+    ranked = sorted([r for r in rules if isinstance(r, dict)], key=lambda r: int(r.get("priority", 80)), reverse=True)
+    for rec in ranked:
+        if str(rec.get("status", "active")) != "active":
+            continue
+        rule_field = normalize_field(str(rec.get("field", "")).strip()) if rec.get("field") else ""
+        if rule_field and rule_field != field_norm and not rec.get("allow_cross_field", False):
+            continue
+        keywords = rec.get("keywords", [])
+        if isinstance(keywords, str):
+            keywords = [keywords]
+        normalized_keywords = [_normalize_topic_text(k) for k in keywords if str(k or "").strip()]
+        normalized_keywords = [k for k in normalized_keywords if k and k not in GENERIC_LEARNING_TOKENS]
+        if not normalized_keywords:
+            continue
+        match_mode = str(rec.get("match", "any")).lower()
+        if match_mode == "all":
+            matched = all(k in text for k in normalized_keywords)
+        else:
+            matched = any(k in text for k in normalized_keywords)
+        if matched:
+            return str(rec.get("topic", "")).strip()
+    return ""
+
+
+def _topic_options() -> list[str]:
+    topics = []
+    for pairs in TOPIC_RULES.values():
+        for topic, _ in pairs:
+            if topic and topic not in topics:
+                topics.append(topic)
+    extra = [
+        "오염관리전략 관리", "자율점검 관리", "표시재료/라벨 관리", "세척 밸리데이션/세척관리",
+        "멸균공정 밸리데이션", "멸균기 적격성평가", "제균여과필터 관리", "문서/총람 관리",
+    ]
+    for t in extra:
+        if t not in topics:
+            topics.append(t)
+    store = st.session_state.get("topic_assignments_store", {})
+    rows = store.get("rows", {}) if isinstance(store, dict) else {}
+    if isinstance(rows, dict):
+        for rec in rows.values():
+            if isinstance(rec, dict):
+                t = str(rec.get("topic", "")).strip()
+                if t and t not in topics:
+                    topics.append(t)
+    return sorted(topics)
+
+
+def _extract_learning_keywords(summary: str, topic: str = "") -> list[str]:
+    text = str(summary or "")
+    found = []
+    compact_text = _normalize_topic_text(text)
+    for phrase in DOMAIN_LEARNING_PHRASES:
+        phrase_norm = _normalize_topic_text(phrase)
+        if phrase_norm and phrase_norm in compact_text and phrase not in found:
+            found.append(phrase)
+    topic_core = re.sub(r"관리$|평가$|밸리데이션$", "", str(topic or "").strip())
+    topic_core = topic_core.replace("/", " ").strip()
+    for token in re.findall(r"[가-힣A-Za-z0-9]+", topic_core):
+        if len(token) >= 3 and token.lower() not in GENERIC_LEARNING_TOKENS and token not in found:
+            found.append(token)
+    for token in re.findall(r"[가-힣A-Za-z0-9]+", text):
+        token = token.strip()
+        if len(token) < 4:
+            continue
+        if token.lower() in GENERIC_LEARNING_TOKENS or token in GENERIC_LEARNING_TOKENS:
+            continue
+        # Avoid learning broad GMP boilerplate words unless they are already in the domain phrase list.
+        if token in {"추가설명자료", "설명자료", "자료제출", "제출할", "제출"}:
+            continue
+        if token not in found:
+            found.append(token)
+        if len(found) >= 5:
+            break
+    return found[:5]
+
+
+def _queue_runtime_learning_rule(cfg: dict[str, str], row_rec: dict, topic: str, batch_id: str, row_id: str) -> bool:
+    keywords = _extract_learning_keywords(row_rec.get("지적사항 요약", ""), topic)
+    if not keywords:
+        return False
+    store = _load_runtime_learning_store(cfg)
+    rules = store.setdefault("rules", [])
+    field = normalize_field(str(row_rec.get("감시분야", "")).strip())
+    norm_key = (field, str(topic).strip(), tuple(sorted(_normalize_topic_text(k) for k in keywords)))
+    for r in rules:
+        if not isinstance(r, dict):
+            continue
+        existing_key = (
+            normalize_field(str(r.get("field", "")).strip()) if r.get("field") else "",
+            str(r.get("topic", "")).strip(),
+            tuple(sorted(_normalize_topic_text(k) for k in (r.get("keywords", []) if isinstance(r.get("keywords", []), list) else [r.get("keywords", "")]))),
+        )
+        if existing_key == norm_key:
+            r["status"] = "pending_learning" if str(r.get("status", "")) != "active" else "active"
+            r["updated_at"] = _now_kst().strftime("%Y-%m-%d %H:%M:%S KST")
+            r["last_batch_id"] = batch_id
+            _save_runtime_learning_store(cfg, store)
+            return True
+    rules.append({
+        "topic": str(topic).strip(),
+        "field": field,
+        "keywords": keywords,
+        "match": "any",
+        "priority": 95,
+        "status": "pending_learning",
+        "source": "admin_manual_edit",
+        "created_from_row_id": row_id,
+        "created_batch_id": batch_id,
+        "created_at": _now_kst().strftime("%Y-%m-%d %H:%M:%S KST"),
+        "summary_sample": str(row_rec.get("지적사항 요약", ""))[:300],
+    })
+    _save_runtime_learning_store(cfg, store)
+    return True
+
+
+def _activate_runtime_learning_rules_for_batch(cfg: dict[str, str], batch_id: str) -> int:
+    store = _load_runtime_learning_store(cfg)
+    rules = store.get("rules", [])
+    if not isinstance(rules, list):
+        return 0
+    activated = 0
+    now = _now_kst().strftime("%Y-%m-%d %H:%M:%S KST")
+    for rec in rules:
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("status", "")) != "pending_learning":
+            continue
+        if str(rec.get("created_batch_id", rec.get("last_batch_id", ""))) != str(batch_id):
+            continue
+        rec["status"] = "active"
+        rec["activated_at"] = now
+        rec["activated_by"] = "admin_confirm"
+        activated += 1
+    if activated:
+        _save_runtime_learning_store(cfg, store)
+    return activated
+
+
+def _load_latest_admin_df(cfg: dict[str, str]) -> pd.DataFrame:
+    if "latest_excel_override_bytes" in st.session_state:
+        latest_bytes = st.session_state.get("latest_excel_override_bytes")
+    else:
+        latest_bytes = _storage_download_bytes(cfg, cfg.get("object", "latest.xlsx")) if _storage_ready(cfg) else None
+    if not latest_bytes:
+        return pd.DataFrame()
+    df, _ = load_workbook(latest_bytes)
+    if df is None or df.empty:
+        return pd.DataFrame()
+    df = df.copy()
+    df["_row_id"] = df.apply(make_observation_row_id, axis=1)
+    return df
+
+
+def _render_pending_review_editor(cfg: dict[str, str], batch_id: str | None, admin_ok: bool) -> None:
+    if not admin_ok or not batch_id:
+        return
+    store = _load_assignment_store(cfg)
+    rows = store.get("rows", {}) if isinstance(store, dict) else {}
+    if not isinstance(rows, dict):
+        return
+    pending_ids = []
+    for row_id, rec in rows.items():
+        if not isinstance(rec, dict) or not _is_assignment_pending(rec):
+            continue
+        rec_batch = str(rec.get("first_seen_batch", rec.get("last_seen_batch", "")))
+        if rec_batch == str(batch_id):
+            pending_ids.append(str(row_id))
+    if not pending_ids:
+        return
+    df_latest = _load_latest_admin_df(cfg)
+    if df_latest.empty or "_row_id" not in df_latest.columns:
+        st.caption("신규 검토 대상이 있으나 현재 엑셀 데이터를 불러오지 못했습니다.")
+        return
+    view = df_latest[df_latest["_row_id"].isin(pending_ids)].copy()
+    if view.empty:
+        st.caption("이번 업로드 신규분 row_id와 현재 엑셀 행이 일치하지 않습니다.")
+        return
+    topic_options = _topic_options()
+    editor_rows = []
+    for _, row in view.iterrows():
+        rid = str(row.get("_row_id", ""))
+        rec = rows.get(rid, {}) if isinstance(rows.get(rid, {}), dict) else {}
+        current_topic = str(rec.get("topic", "")).strip() or infer_topic_from_row(row)
+        editor_rows.append({
+            "row_id": rid,
+            "등록월": _clean_identity_value(row.get("등록월", "")),
+            "제조업체명": _clean_identity_value(row.get("제조업체명", "")),
+            "감시분야": _clean_identity_value(row.get("감시분야", "")),
+            "등급": _clean_identity_value(row.get("등급", "")),
+            "지적사항 요약": _clean_identity_value(row.get("지적사항 요약", "")),
+            "현재분류": current_topic,
+            "수정분류": current_topic,
+        })
+    editor_df = pd.DataFrame(editor_rows)
+    st.markdown("#### 신규/미확정 분류 검토")
+    st.caption("관리자만 수정할 수 있습니다. 수정 저장 후 확정하면 해당 row_id가 잠기고, 수정 패턴은 다음 신규 행 분류에 학습됩니다.")
+    edited = st.data_editor(
+        editor_df,
+        key=f"pending_topic_editor_{batch_id}",
+        hide_index=True,
+        use_container_width=True,
+        disabled=["row_id", "등록월", "제조업체명", "감시분야", "등급", "지적사항 요약", "현재분류"],
+        column_config={
+            "row_id": None,
+            "지적사항 요약": st.column_config.TextColumn("지적사항 요약", width="large"),
+            "현재분류": st.column_config.TextColumn("현재분류", width="medium"),
+            "수정분류": st.column_config.SelectboxColumn("수정분류", options=topic_options, required=True, width="medium"),
+        },
+    )
+    if st.button("수정분류 저장", key=f"save_pending_topic_edits_{batch_id}", type="secondary"):
+        if not admin_ok:
+            st.error("관리자 권한이 없어 수정할 수 없습니다.")
+            return
+        latest_by_id = {str(r.get("_row_id", "")): r for _, r in view.iterrows()}
+        changed = 0
+        learned = 0
+        now = _now_kst().strftime("%Y-%m-%d %H:%M:%S KST")
+        for _, erow in edited.iterrows():
+            rid = str(erow.get("row_id", "")).strip()
+            new_topic = str(erow.get("수정분류", "")).strip()
+            old_topic = str(erow.get("현재분류", "")).strip()
+            if not rid or not new_topic or new_topic == old_topic:
+                continue
+            rec = rows.get(rid, {}) if isinstance(rows.get(rid, {}), dict) else {}
+            if _is_assignment_confirmed(rec):
+                continue
+            rec["topic"] = new_topic
+            rec["status"] = "pending_review"
+            rec["locked"] = False
+            rec["source"] = "admin_manual_edit_pending"
+            rec["manual_edited_at"] = now
+            rec["manual_edited_by"] = "admin_upload"
+            rec["last_seen_batch"] = batch_id
+            rows[rid] = rec
+            changed += 1
+            row_rec = latest_by_id.get(rid)
+            if row_rec is not None and _queue_runtime_learning_rule(cfg, row_rec, new_topic, batch_id, rid):
+                learned += 1
+        if changed:
+            store["last_manual_edit_batch_id"] = batch_id
+            store["last_manual_edit_count"] = int(changed)
+            _save_assignment_store(cfg, store)
+            st.success(f"수정분류 {changed:,}건을 저장했습니다. 학습 후보 {learned:,}건도 저장했습니다. 확정 버튼을 눌러 잠금 처리하십시오.")
+            st.rerun()
+        else:
+            st.info("변경된 수정분류가 없습니다.")
+
+
 def _build_assignment_record(row, topic: str, source: str, filename: str = "", status: str = "pending_review", batch_id: str = "") -> dict:
     status = status or "pending_review"
     return {
@@ -919,6 +1263,7 @@ def _apply_persistent_topic_assignments(df: pd.DataFrame, cfg: dict[str, str]) -
     out = df.copy()
     out["_row_id"] = out.apply(make_observation_row_id, axis=1)
     store = _load_assignment_store(cfg)
+    _load_runtime_learning_store(cfg)
     topic_map = _assignment_topic_map(store)
     status_map = _assignment_status_map(store)
     record_map = _assignment_record_map(store)
@@ -939,6 +1284,7 @@ def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, 
     are saved as pending_review until an authenticated admin confirms the upload.
     """
     store = _load_assignment_store(cfg)
+    _load_runtime_learning_store(cfg)
     rows = store.setdefault("rows", {})
     before_count = len(rows) if isinstance(rows, dict) else 0
     if not isinstance(rows, dict):
@@ -953,13 +1299,19 @@ def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, 
         if not is_real_finding(row.get("지적사항 요약", "")):
             continue
         row_id = make_observation_row_id(row)
+        runtime_topic = _runtime_topic_override(
+            row.get("감시분야", ""),
+            row.get("지적사항 요약", ""),
+            row.get("1차 구분", ""),
+            row.get("2차 구분 (참고)", ""),
+        )
         priority_topic = _priority_topic_override_v7(
             row.get("감시분야", ""),
             row.get("지적사항 요약", ""),
             row.get("1차 구분", ""),
             row.get("2차 구분 (참고)", ""),
         )
-        topic = priority_topic or _infer_topic_from_row_base(row) or "세부 항목 관리"
+        topic = runtime_topic or priority_topic or _infer_topic_from_row_base(row) or "세부 항목 관리"
 
         if row_id in rows:
             rec = _normalize_assignment_record(rows[row_id])
@@ -1021,7 +1373,10 @@ def _confirm_pending_assignments_for_batch(cfg: dict[str, str], batch_id: str) -
         rec_batch = str(rec.get("first_seen_batch", rec.get("last_seen_batch", "")))
         if str(batch_id) and rec_batch != str(batch_id):
             continue
-        rec["status"] = "confirmed"
+        if str(rec.get("source", "")).startswith("admin_manual_edit"):
+            rec["status"] = "manual_confirmed"
+        else:
+            rec["status"] = "confirmed"
         rec["locked"] = True
         rec["confirmed_at"] = now
         rec["confirmed_by"] = "admin_upload"
@@ -1030,6 +1385,8 @@ def _confirm_pending_assignments_for_batch(cfg: dict[str, str], batch_id: str) -
     if confirmed:
         store["last_confirmed_batch_id"] = batch_id
         store["last_confirmed_count"] = int(confirmed)
+        activated_learning = _activate_runtime_learning_rules_for_batch(cfg, batch_id)
+        store["last_activated_learning_rules"] = int(activated_learning)
         _save_assignment_store(cfg, store)
     return confirmed
 
@@ -1092,6 +1449,7 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                     pending_for_batch = 0
                 if pending_for_batch > 0:
                     st.caption(f"관리자 검토 대기 신규분: {pending_for_batch:,}건")
+                    _render_pending_review_editor(cfg, confirm_batch_id, admin_ok)
                     if st.button("이번 업로드 신규분 분류 확정", key="btn_confirm_pending_upload", type="secondary"):
                         confirmed_count = _confirm_pending_assignments_for_batch(cfg, confirm_batch_id)
                         if confirmed_count > 0:
@@ -2033,8 +2391,21 @@ def infer_topic_from_row(row) -> str:
         status = str(status_map.get(row_id, "")).strip() if isinstance(status_map, dict) else ""
         if topic and status in CONFIRMED_ASSIGNMENT_STATUSES:
             return topic
+        record_map = st.session_state.get("topic_assignments_record_map", {})
+        rec = record_map.get(row_id, {}) if isinstance(record_map, dict) else {}
+        if topic and status in PENDING_ASSIGNMENT_STATUSES and isinstance(rec, dict) and str(rec.get("source", "")).startswith("admin_manual_edit"):
+            return topic
 
-    # 1) New or pending_review row: upgraded PY priority rules run before the base engine.
+    # 1) New or pending_review row: admin-learned active rules and upgraded PY priority rules run before the base engine.
+    runtime_topic = _runtime_topic_override(
+        row.get("감시분야", ""),
+        row.get("지적사항 요약", ""),
+        row.get("1차 구분", ""),
+        row.get("2차 구분 (참고)", ""),
+    )
+    if runtime_topic:
+        return runtime_topic
+
     priority_topic = _priority_topic_override_v7(
         row.get("감시분야", ""),
         row.get("지적사항 요약", ""),

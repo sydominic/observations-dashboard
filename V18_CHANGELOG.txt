@@ -1,0 +1,32 @@
+# v18 Admin Manual Topic Edit + Runtime Learning
+
+## 목적
+- 관리자 비밀번호 인증 후에만 신규/미확정 지적사항의 세부구분을 직접 수정할 수 있도록 함.
+- 관리자 수정값을 row_id 기준 assignment에 저장하고, 확정 시 잠금 처리.
+- 관리자 수정 패턴을 runtime learning rule로 저장하여 다음 신규 row_id 자동분류에 반영.
+
+## 주요 변경
+1. Admin Upload 내부에 신규/미확정 분류 검토표 추가
+   - row_id, 등록월, 제조업체명, 감시분야, 등급, 지적사항 요약, 현재분류, 수정분류 표시
+   - 수정분류는 드롭다운으로 선택
+   - 관리자 인증 상태에서만 표시 및 저장 가능
+
+2. 수정분류 저장
+   - pending_review 상태 유지
+   - source = admin_manual_edit_pending
+   - 수정 이력 저장
+   - 학습 후보 rule은 topic_learning_rules_runtime.json에 pending_learning 상태로 저장
+
+3. 확정 버튼
+   - 이번 업로드 batch의 pending_review만 confirmed/manual_confirmed로 전환
+   - admin_manual_edit_pending 항목은 manual_confirmed로 잠금
+   - 해당 batch의 pending_learning rule을 active로 전환
+
+4. 자동학습 적용
+   - active runtime rule은 신규/pending row 분류 시 PY 기본규칙보다 먼저 적용
+   - confirmed/manual_confirmed/legacy_confirmed는 기존값 유지
+
+## 영향 범위
+- 일반 Dashboard / Manufacturer / Analysis Report 화면은 변경 없음
+- 일반 조회 사용자는 수정 UI 접근 불가
+- Supabase Storage 추가 사용 파일: topic_learning_rules_runtime.json
