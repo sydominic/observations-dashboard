@@ -1258,41 +1258,75 @@ def _render_pending_review_editor(cfg: dict[str, str], batch_id: str | None, adm
     topic_options = _topic_options()
     if current_topic and current_topic not in topic_options:
         topic_options = [current_topic] + topic_options
-    default_idx = topic_options.index(current_topic) if current_topic in topic_options else 0
-    new_topic = st.selectbox("수정분류", topic_options, index=default_idx, key="admin_topic_new_topic_v19")
+    direct_input_label = "➕ 신규 분류 직접 입력"
+    topic_options_with_direct = topic_options + ([direct_input_label] if direct_input_label not in topic_options else [])
+    default_idx = topic_options_with_direct.index(current_topic) if current_topic in topic_options_with_direct else 0
+    selected_topic_choice = st.selectbox(
+        "수정분류",
+        topic_options_with_direct,
+        index=default_idx,
+        key="admin_topic_new_topic_v20",
+    )
+    manual_new_topic = ""
+    if selected_topic_choice == direct_input_label:
+        manual_new_topic = st.text_input(
+            "신규 분류명",
+            value="",
+            placeholder="예: 오염관리전략 관리",
+            key="admin_topic_direct_new_topic_v20",
+        ).strip()
+        st.caption("기존 목록에 없는 경우에만 사용하십시오. 저장하면 해당 행은 manual_confirmed로 고정되고, 신규 분류명은 향후 선택 목록과 학습 후보에 반영됩니다.")
+        if manual_new_topic and manual_new_topic in topic_options:
+            st.warning("이미 존재하는 세부구분명입니다. 기존 목록에서 선택하는 것을 권장합니다.")
 
-    if st.button("선택 항목 분류 저장", key="btn_save_single_topic_edit_v19", type="secondary"):
+    if st.button("선택 항목 분류 저장", key="btn_save_single_topic_edit_v20", type="secondary"):
         if not admin_ok:
             st.error("관리자 권한이 없어 수정할 수 없습니다.")
             return
-        new_topic = str(new_topic).strip()
+        is_new_topic_direct = selected_topic_choice == direct_input_label
+        new_topic = manual_new_topic if is_new_topic_direct else str(selected_topic_choice).strip()
+        new_topic = re.sub(r"\s+", " ", str(new_topic or "").strip())
         if not selected_rid or not new_topic:
             st.error("수정할 항목 또는 수정분류가 없습니다.")
             return
+        if len(new_topic) < 4:
+            st.error("신규 분류명은 너무 짧습니다. 업무 의미가 드러나도록 4자 이상으로 입력하십시오.")
+            return
+        if new_topic in {"관리", "자료", "기타", "추가", "제출", "문서", "절차", "확인"}:
+            st.error("너무 포괄적인 분류명입니다. 예: '오염관리전략 관리', '자율점검 관리'처럼 구체적으로 입력하십시오.")
+            return
+        if is_new_topic_direct and not (new_topic.endswith("관리") or new_topic.endswith("평가") or "밸리데이션" in new_topic or "검증" in new_topic):
+            st.warning("신규 분류명은 가급적 '... 관리', '... 평가', '... 밸리데이션'처럼 체계적으로 작성하는 것을 권장합니다.")
         if new_topic == current_topic and status in CONFIRMED_ASSIGNMENT_STATUSES:
             st.info("이미 같은 분류로 확정된 항목입니다.")
             return
         now = _now_kst().strftime("%Y-%m-%d %H:%M:%S KST")
         batch_for_edit = str(batch_id or store.get("last_upload_batch_id", "") or _make_upload_batch_id())
+        edit_source = "admin_manual_new_topic" if is_new_topic_direct else "admin_manual_edit"
         old_rec = rows.get(selected_rid, {}) if isinstance(rows.get(selected_rid, {}), dict) else {}
         if not old_rec:
-            old_rec = _build_assignment_record(row, new_topic, "admin_manual_edit", filename=str((st.session_state.get("latest_meta", {}) or {}).get("original_filename", "")), status="manual_confirmed", batch_id=batch_for_edit)
+            old_rec = _build_assignment_record(row, new_topic, edit_source, filename=str((st.session_state.get("latest_meta", {}) or {}).get("original_filename", "")), status="manual_confirmed", batch_id=batch_for_edit)
         old_rec.update({
             "topic": new_topic,
             "status": "manual_confirmed",
             "locked": True,
-            "source": "admin_manual_edit",
+            "source": edit_source,
             "manual_edited_at": now,
             "manual_edited_by": "admin_upload",
             "last_seen_batch": batch_for_edit,
+            "topic_created_by_admin": bool(is_new_topic_direct),
         })
         rows[selected_rid] = old_rec
         store["last_manual_edit_batch_id"] = batch_for_edit
         store["last_manual_edit_row_id"] = selected_rid
         store["last_manual_edit_topic"] = new_topic
+        store["last_manual_edit_source"] = edit_source
         _save_assignment_store(cfg, store)
         _queue_runtime_learning_rule(cfg, row, new_topic, batch_for_edit, selected_rid)
-        st.success("선택 항목의 분류를 저장하고 manual_confirmed로 확정했습니다. 학습 후보도 저장했습니다.")
+        if is_new_topic_direct:
+            st.success("신규 분류명을 저장하고 선택 항목을 manual_confirmed로 확정했습니다. 학습 후보도 저장했습니다.")
+        else:
+            st.success("선택 항목의 분류를 저장하고 manual_confirmed로 확정했습니다. 학습 후보도 저장했습니다.")
         st.rerun()
 
 

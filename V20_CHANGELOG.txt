@@ -1,0 +1,7 @@
+# V20 - Admin new topic direct input
+
+- Added administrator-only direct topic input in the topic review/editor panel.
+- Admin can choose an existing topic or select "➕ 신규 분류 직접 입력" and type a new topic name.
+- Directly entered topic values are saved as manual_confirmed assignments with source=admin_manual_new_topic.
+- New topic values are added to future selection options through topic_assignments.json and queued as runtime learning candidates.
+- General users still cannot see or use the editor or save logic.
