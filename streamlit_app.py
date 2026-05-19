@@ -144,6 +144,7 @@ ALIASES = {
 }
 TOPIC_RULES = {
     "시설장비": [
+        ("세척 밸리데이션/세척관리", ["제조설비 세척", "제조설비세척", "간이세척", "설비 세척", "장비 세척", "세척 추가설명", "세척자료"]),
         ("교정/점검 관리", ["교정", "점검", "압력계", "허용기준", "사용범위", "분동", "기준 및 범위"]),
         ("환경/온습도 관리", ["온도", "습도", "온습도", "환경", "청정도", "차압", "공조", "환경조건"]),
         ("장비 적격성평가", ["적격성평가", "적격성 평가", "qualification", "pq", "iq", "oq", "성능적격성평가", "최악조건"]),
@@ -157,6 +158,8 @@ TOPIC_RULES = {
         ("청소/소독 관리", ["청소", "소독", "세정", "세척 후 상태", "위생"]),
     ],
     "품질경영": [
+        ("오염관리전략 관리", ["오염관리전략", "오염 관리 전략", "contamination control strategy", "ccs", "오염관리전략 관련 추가 설명", "오염관리전략 추가 설명"]),
+        ("자율점검 관리", ["자율점검", "자율 점검", "자율점검 실시자", "자율점검실시자", "자율점검 실시", "자율점검 추가설명"]),
         ("문서/총람 관리", ["문서", "총람", "개정", "개정 이력", "발효", "제조소 총람", "절차서", "기준서", "양식"]),
         ("데이터 완전성 관리", ["데이터 완전성", "data integrity", "di", "무결성", "기록 무결성"]),
         ("회수/변경/일탈 관리", ["회수", "변경", "일탈", "시정", "보완", "gmp 위원회", "조치계획", "재발방지"]),
@@ -183,6 +186,7 @@ TOPIC_RULES = {
         ("검체채취/검체관리", ["검체채취", "검체", "채취 절차"]),
     ],
     "제조": [
+        ("표시재료/라벨 관리", ["직접 포장", "직접포장", "외부 용기", "외부용기", "기재사항", "표시사항", "용기 기재", "용기 표시", "포장 기재사항", "외부용기 기재사항"]),
         ("세척 밸리데이션/세척관리", ["세척 밸리데이션", "세척밸리데이션", "세척 검증", "세척", "잔류물", "세척효율", "세척후유지시간"]),
         ("청소/소독 관리", ["소독", "소독효과", "정기청소", "청소 절차", "오염관리"]),
         ("작업실 오염방지 관리", ["교차오염", "오염방지", "보호용 고글", "작업복"]),
@@ -630,8 +634,12 @@ def _priority_topic_override_v7(field: str, summary: str, ref1: str = "", ref2: 
         return "품질기록 사실성 관리"
     if has_any("품질에관한기록") and has_any("사실대로", "정확하게"):
         return "품질기록 사실성 관리"
+    if has_any("오염관리전략", "오염관리전략관련", "contaminationcontrolstrategy", "ccs"):
+        return "오염관리전략 관리"
+    if has_any("자율점검", "자율점검실시자", "자율점검실시", "자율점검자"):
+        return "자율점검 관리"
     if has_any("자율점검") and has_any("절차", "평가사항", "조치"):
-        return "품질시스템 관리"
+        return "자율점검 관리"
     if has_any("반복불만", "반복되는불만") or (has_any("불만") and has_any("반복", "재발")):
         return "불만처리"
     if has_any("문서") and has_any("배포", "회수") and has_any("기록", "관리"):
@@ -661,7 +669,11 @@ def _priority_topic_override_v7(field: str, summary: str, ref1: str = "", ref2: 
     if has_any("직접자재") and has_any("엔도톡신", "엔도톡신시험"):
         return "직접자재 엔도톡신시험 관리"
 
-    # 제조 / 세척 / 공정밸리데이션 / 멸균
+    # 제조 / 세척 / 공정밸리데이션 / 멸균 / 포장표시
+    if has_any("직접포장", "외부용기", "외부용기의기재사항", "기재사항", "표시사항") and has_any("포장", "용기", "라벨", "표시", "기재", "자료제출", "추가설명"):
+        return "표시재료/라벨 관리"
+    if has_any("제조설비세척", "제조설비", "설비세척", "장비세척", "간이세척") and has_any("세척", "간이세척", "추가설명", "설명자료", "자료제출"):
+        return "세척 밸리데이션/세척관리"
     if has_any("잔류물") and has_any("세척", "세척확인", "세척검증"):
         return "세척 밸리데이션/세척관리"
     if has_any("연속생산") and has_any("세척") and has_any("유효성", "검증"):
@@ -857,15 +869,11 @@ def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, 
             row.get("2차 구분 (참고)", ""),
         )
         if row_id in rows:
-            # If v6 already froze a wrong auto topic, allow confirmed v7 PY rules to correct it.
-            rec = rows.get(row_id, {})
-            old_topic = str(rec.get("topic", "") if isinstance(rec, dict) else rec).strip()
-            old_source = str(rec.get("source", "") if isinstance(rec, dict) else "").strip()
-            if priority_topic and old_topic != priority_topic and not old_source.startswith("manual"):
-                rows[row_id] = _build_assignment_record(row, priority_topic, "py_priority_override_v8", filename)
-                updated += 1
+            # Existing row_id must be treated as already confirmed/frozen.
+            # Do NOT reclassify old rows when PY rules are upgraded.
+            # New PY priority rules are applied only to newly seen row_id values.
             continue
-        # For a new row, use priority PY rules first, then the existing engine once and freeze the result.
+        # For a new row only, use priority PY rules first, then the existing engine once and freeze the result.
         topic = priority_topic or _infer_topic_from_row_base(row)
         if not topic:
             topic = "세부 항목 관리"
@@ -1529,6 +1537,8 @@ def _semantic_topic_override(field: str, summary: str, ref1: str, ref2: str) -> 
         return "보관조건/창고 관리"
 
     if field == "시설장비":
+        if has_any("제조설비세척", "제조설비", "설비세척", "간이세척") and has_any("세척", "간이세척", "추가설명", "설명자료", "자료제출"):
+            return "세척 밸리데이션/세척관리"
         if has_any("압축공기사용점모니터링"):
             return "압축공기 사용점 모니터링"
         if (has_any("주사용수", "압축공기") and has_any("필터적합성")) or has_any("압축공기시스템필터적합성"):
@@ -1549,6 +1559,10 @@ def _semantic_topic_override(field: str, summary: str, ref1: str, ref2: str) -> 
             return "세척 밸리데이션/세척관리"
 
     if field == "품질경영":
+        if has_any("오염관리전략", "오염관리전략관련", "contaminationcontrolstrategy", "ccs"):
+            return "오염관리전략 관리"
+        if has_any("자율점검", "자율점검실시자", "자율점검실시", "자율점검자"):
+            return "자율점검 관리"
         if has_any("분석에사용하는시약", "시약사용기한"):
             return "시약/조제시액 관리"
         if has_any("제조및품질에관련된시스템과기능에대한최신목록"):
@@ -1824,18 +1838,8 @@ def _infer_topic_from_row_base(row) -> str:
 
 
 def infer_topic_from_row(row) -> str:
-    # 0) Confirmed PY priority rules must run before frozen assignments.
-    #    This corrects rows that v6 may already have saved with a wrong auto topic.
-    priority_topic = _priority_topic_override_v7(
-        row.get("감시분야", ""),
-        row.get("지적사항 요약", ""),
-        row.get("1차 구분", ""),
-        row.get("2차 구분 (참고)", ""),
-    )
-    if priority_topic:
-        return priority_topic
-
-    # 1) Row-level assignment: only exact same row_id keeps the existing classification.
+    # 0) Existing confirmed row_id wins. This preserves previously reviewed classifications
+    #    even when PY rules are upgraded for new observations.
     fixed_topic = str(row.get("확정주제그룹", "")).strip()
     if fixed_topic:
         return fixed_topic
@@ -1853,7 +1857,17 @@ def infer_topic_from_row(row) -> str:
             if topic:
                 return topic
 
-    # 2) New row: use the current built-in/JSON topic engine.
+    # 1) New row only: upgraded PY priority rules run before the base engine.
+    priority_topic = _priority_topic_override_v7(
+        row.get("감시분야", ""),
+        row.get("지적사항 요약", ""),
+        row.get("1차 구분", ""),
+        row.get("2차 구분 (참고)", ""),
+    )
+    if priority_topic:
+        return priority_topic
+
+    # 2) Fallback for new rows: use the current built-in/JSON topic engine.
     return _infer_topic_from_row_base(row)
 
 
@@ -2020,6 +2034,8 @@ TOPIC_ADVICE = {
     "컴퓨터시스템/백업": "백업, 복구시험, 시간 동기화 등 전산 통제를 문서와 실제 운영이 일치하도록 점검하는 것이 좋습니다.",
     "청소/소독 관리": "청소·소독 기준서와 실제 기록, 주기, 판정기준의 연결을 다시 보는 것이 좋습니다.",
     "문서/총람 관리": "총람과 SOP, 개정이력, 정기검토 체계를 먼저 정비하는 것이 좋습니다.",
+    "오염관리전략 관리": "오염관리전략(CCS)의 오염원, 관리수단, 모니터링, 주기적 검토 근거가 서로 연결되는지 점검하는 것이 좋습니다.",
+    "자율점검 관리": "자율점검 계획, 실시자 자격, 점검범위, 후속조치 기록이 절차와 실제 운영에서 일치하는지 확인하는 것이 좋습니다.",
     "데이터 완전성 관리": "기록 생성·검토·보관·백업의 각 단계에서 데이터 완전성 통제가 실제로 작동하는지 확인하는 것이 좋습니다.",
     "회수/변경/일탈 관리": "변경·일탈·조치계획의 후속관리까지 닫히는 구조인지 점검하는 것이 좋습니다.",
     "공급자/계약자/업체평가": "공급자 평가 기준과 주기, 재평가 근거를 문서화해 두는 것이 좋습니다.",
@@ -2331,7 +2347,7 @@ def cached_checklist_pdf(df: pd.DataFrame, period_label: str, topn_per_field: in
 def cached_compact_pdf(df: pd.DataFrame, period_label: str, topn_per_field: int | None = 10):
     return build_compact_field_checklist_pdf(df.copy(), period_label, topn_per_field=topn_per_field)
 TOPIC_META_BUCKETS = {
-    "문서기록": {"문서/총람 관리", "시험기록 관리", "제조기록서 관리", "추적성/데이터 관리", "품질시스템 관리"},
+    "문서기록": {"문서/총람 관리", "시험기록 관리", "제조기록서 관리", "추적성/데이터 관리", "품질시스템 관리", "오염관리전략 관리", "자율점검 관리"},
     "변경일탈후속": {"회수/변경/일탈 관리"},
     "설비환경운영": {"교정/점검 관리", "환경/온습도 관리", "설비 운영 관리", "시험기기 적격성/교정", "장비 적격성평가", "청소/소독 관리"},
     "공급자원자재": {"공급자/계약자/업체평가", "공급자 평가", "보관조건/창고 관리", "입고/검체채취 관리", "식별/표시 관리"},
@@ -2351,6 +2367,8 @@ FIELD_INTERPRETATION_MAP = {
         "회수/변경/일탈 관리": "이슈 발생 후 후속조치와 변경관리 닫힘 구조가 약한 흐름",
         "데이터 완전성 관리": "기록 생성부터 보관까지 데이터 통제의 일관성을 봐야 하는 흐름",
         "품질시스템 관리": "품질시스템의 기본 운영요건을 다시 조여야 하는 흐름",
+        "오염관리전략 관리": "오염관리전략이 문서상 선언에 그치지 않고 실제 오염관리 수단과 연결되어야 하는 흐름",
+        "자율점검 관리": "자율점검 실시자, 점검범위, 후속조치 운영 근거를 보강해야 하는 흐름",
     },
     "원자재": {
         "보관조건/창고 관리": "원자재 lifecycle 중 보관·식별·창고 운영이 중심이 되는 흐름",
@@ -2923,6 +2941,8 @@ CHECKLIST_QUESTION_MAP = {
     "공급자/계약자/업체평가": "공급자·수탁자 적격성 평가와 정기 재평가가 기준에 따라 수행되고 근거 자료가 유지되는가?",
     "데이터 완전성 관리": "기록 생성, 수정, 검토, 보관 과정에서 데이터 무결성과 추적성이 확보되는가?",
     "품질시스템 관리": "품질시스템 전반의 책임, 검토 주기, 후속조치 체계가 문서와 실제 운영에서 일치하는가?",
+    "오염관리전략 관리": "오염관리전략(CCS)의 오염원 파악, 관리수단, 모니터링, 정기검토가 문서와 현장에서 일치하는가?",
+    "자율점검 관리": "자율점검 실시자 자격, 점검범위, 점검주기, 후속조치가 절차에 따라 운영되고 기록되는가?",
     "교정/점검 관리": "설비·계측기의 교정 및 점검 주기가 정해진 기준대로 관리되고 사용 전 상태 확인이 가능한가?",
     "설비 운영 관리": "설비의 운전기준, 사용상태, 유지관리 이력이 서로 연결되어 현장에서 바로 확인 가능한가?",
     "환경/온습도 관리": "온도·습도·차압 등 환경조건이 기준 내로 유지되며 이탈 발생 시 즉시 평가·조치되는가?",
