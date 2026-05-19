@@ -456,32 +456,89 @@ def _make_registration_datetime(sheet_year: int, reg_value) -> pd.Timestamp:
     except Exception:
         return pd.Timestamp(year=int(sheet_year), month=int(month), day=1)
 
+def _empty_clean_sheet_frame(sheet_name: str, sheet_year: int) -> pd.DataFrame:
+    """Return an empty but schema-valid result frame for a copied yearly sheet with no rows."""
+    cols = list(dict.fromkeys(REQUIRED_RESULT_COLUMNS + [
+        "시트명", "시트기준연도", "연도", "등록월_num", "분기", "연도분기",
+        "등록일자_dt", "실사연월", "원본순서"
+    ]))
+    out = pd.DataFrame(columns=cols)
+    out["시트명"] = pd.Series(dtype="object")
+    out["시트기준연도"] = pd.Series(dtype="Int64")
+    out["연도"] = pd.Series(dtype="Int64")
+    out["등록월_num"] = pd.Series(dtype="Int64")
+    out["분기"] = pd.Series(dtype="Int64")
+    out["연도분기"] = pd.Series(dtype="object")
+    out["등록일자_dt"] = pd.Series(dtype="datetime64[ns]")
+    out["실사연월"] = pd.Series(dtype="object")
+    out["원본순서"] = pd.Series(dtype="Int64")
+    return out
+
 def clean_sheet(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+    """Clean one result sheet.
+
+    v22 rule:
+    - A yearly copied sheet with the same required columns but no data rows is valid.
+    - Empty yearly sheets are returned as 0-row frames, not validation failures.
+    - Year/quarter calculation uses the sheet year + 등록월 month only.
+    - 실사기간 is never used to determine dashboard period.
+    """
     df, title_text = _prepare_sheet_dataframe(raw)
+    sheet_year = infer_year_from_sheet_name(sheet_name, title_text)
+
     rename_map = {}
     for canonical in ALIASES:
         found = find_alias(df.columns, canonical)
         if found is not None:
             rename_map[found] = canonical
     df = df.rename(columns=rename_map)
+
     missing_required = [c for c in REQUIRED_RESULT_COLUMNS if c not in df.columns]
     if missing_required:
         log(f"유효하지 않은 실태조사 시트 제외: {sheet_name} / 누락 컬럼: {', '.join(missing_required)}")
         return pd.DataFrame(columns=REQUIRED_RESULT_COLUMNS)
+
+    # Keep only the canonical columns first. Extra columns in the copied sheet are ignored.
+    # This also prevents empty/format-only columns from causing downstream KeyError.
+    df = df[[c for c in REQUIRED_RESULT_COLUMNS if c in df.columns]].copy()
+    for c in REQUIRED_RESULT_COLUMNS:
+        if c not in df.columns:
+            df[c] = ""
+
     df = df.fillna("")
+
+    # Fill down merged/repeated header-like columns only when data rows exist.
     for col in ["등록월", "제조업체명", "유형", "완제제형", "실사방식", "실사기간"]:
-        df[col] = df[col].replace("", pd.NA).ffill().fillna("")
+        if col in df.columns:
+            df[col] = df[col].replace("", pd.NA).ffill().fillna("")
+
     key_cols = ["제조업체명", "지적사항 요약", "감시분야", "등급"]
+    # A copied future-year sheet may contain only header/formatting rows. It is valid but 0 rows.
+    if df.empty:
+        return _empty_clean_sheet_frame(sheet_name, int(sheet_year))
+
     df = df[~df[key_cols].apply(lambda s: s.astype(str).str.strip().eq("").all(), axis=1)].copy()
 
-    sheet_year = infer_year_from_sheet_name(sheet_name, title_text)
+    if df.empty:
+        return _empty_clean_sheet_frame(sheet_name, int(sheet_year))
+
     month_num = df["등록월"].map(_parse_registration_month)
     df["시트명"] = sheet_name
     df["시트기준연도"] = int(sheet_year)
     df["연도"] = int(sheet_year)
     df["등록월_num"] = pd.to_numeric(month_num, errors="coerce").astype("Int64")
     df["분기"] = ((df["등록월_num"] - 1) // 3 + 1).astype("Int64")
-    df["연도분기"] = df["연도"].astype(str) + "-" + df["분기"].astype("Int64").astype(str) + "Q"
+
+    # Avoid '<NA>Q' labels when a data row has no usable 등록월.
+    df["연도분기"] = ""
+    valid_period_mask = df["분기"].notna()
+    df.loc[valid_period_mask, "연도분기"] = (
+        df.loc[valid_period_mask, "연도"].astype(str)
+        + "-"
+        + df.loc[valid_period_mask, "분기"].astype("Int64").astype(str)
+        + "Q"
+    )
+
     for col in ["제조업체명", "유형", "완제제형", "실사방식", "실사기간", "등급", "지적사항 요약", "감시분야"]:
         df[col] = df[col].astype(str).str.strip()
     df["감시분야"] = df["감시분야"].map(normalize_field)
@@ -492,6 +549,7 @@ def clean_sheet(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
     df["원본순서"] = range(1, len(df) + 1)
     df["순번"] = range(1, len(df) + 1)
     return df
+
 def _pick_default_xlsx() -> Path | None:
     core_keywords = ["의약품 제조소 GMP 정기실태조사 리스트", "정기실태조사 리스트"]
 
@@ -1581,12 +1639,21 @@ def _confirm_pending_assignments_for_batch(cfg: dict[str, str], batch_id: str) -
 
 def _validate_uploaded_workbook(uploaded_bytes: bytes) -> tuple[pd.DataFrame, list[str]]:
     df_check, sheets_check = load_workbook(uploaded_bytes)
-    if df_check.empty:
-        raise ValueError("엑셀을 읽었지만 대시보드에 반영할 행이 없습니다. 시트명/컬럼명을 확인하십시오.")
-    required = ["제조업체명", "감시분야", "등급", "지적사항 요약"]
+
+    if not sheets_check:
+        raise ValueError("유효한 실태조사결과 시트를 찾지 못했습니다. 시트명과 필수 컬럼을 확인하십시오.")
+
+    # A copied future-year sheet with only headers is valid as 0 rows.
+    # However, if all valid sheets are empty, the upload may still be saved but the dashboard will have no rows.
+    required = ["제조업체명", "감시분야", "등급", "지적사항 요약", "등록월"]
     missing = [col for col in required if col not in df_check.columns]
-    if missing:
+    if missing and not df_check.empty:
         raise ValueError("필수 컬럼 인식 실패: " + ", ".join(missing))
+
+    if df_check.empty:
+        # Keep schema columns so downstream metadata/upload can proceed.
+        st.info("유효한 실태조사결과 시트는 있으나 반영할 데이터 행은 0건입니다. 빈 연도 시트는 0행으로 처리합니다.")
+
     return df_check, sheets_check
 
 
@@ -1654,7 +1721,7 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                 uploaded_bytes = new_file.getvalue()
                 try:
                     check_df, check_sheets = _validate_uploaded_workbook(uploaded_bytes)
-                    st.success(f"업로드 전 검증 완료: {len(check_df):,}행 / 시트 {len(check_sheets)}개")
+                    st.success(f"업로드 전 검증 완료: {len(check_df):,}행 / 유효 시트 {len(check_sheets)}개")
                     if st.button("업로드하고 latest.xlsx로 반영", type="primary", key="btn_upload_latest"):
                         if configured:
                             batch_id = _make_upload_batch_id()
