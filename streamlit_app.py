@@ -345,59 +345,149 @@ def find_alias(cols, canonical):
         if normalize_name(alias) in norm:
             return norm[normalize_name(alias)]
     return None
-def pick_result_sheets(xls: pd.ExcelFile):
-    return [s for s in xls.sheet_names if "실태조사 결과" in s] or xls.sheet_names[:1]
-def infer_year_from_sheet_name(sheet_name: str, title_cell: str = "") -> int:
-    text = f"{sheet_name} {title_cell}"
-    m = re.search(r"(20\d{2})", text)
-    return int(m.group(1)) if m else datetime.now().year
-def clean_sheet(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+
+REQUIRED_RESULT_COLUMNS = [
+    "순번", "등록월", "제조업체명", "유형", "완제제형", "실사방식",
+    "실사기간", "등급", "지적사항 요약", "감시분야"
+]
+
+def _normalized_sheet_name(sheet_name: str) -> str:
+    return re.sub(r"\s+", "", str(sheet_name or ""))
+
+def _sheet_year_from_name(sheet_name: str) -> int | None:
+    m = re.search(r"(20\d{2})", str(sheet_name or ""))
+    return int(m.group(1)) if m else None
+
+def _is_result_sheet_name(sheet_name: str) -> bool:
+    n = _normalized_sheet_name(sheet_name)
+    # 운영 기준: '2026 실태조사결과', '2027 실태조사 결과'처럼 연도+실태조사결과.
+    # 기존 단일시트 호환을 위해 '실태조사결과'도 허용한다.
+    return bool(re.search(r"(?:20\d{2})?실태조사결과", n))
+
+def _looks_like_header(values) -> bool:
+    cols = [str(v).strip() for v in values if str(v).strip() and str(v).strip().lower() != "nan"]
+    if not cols:
+        return False
+    return all(find_alias(cols, canonical) is not None for canonical in REQUIRED_RESULT_COLUMNS)
+
+def _prepare_sheet_dataframe(raw: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+    """Return a dataframe with the detected header row applied and a title preview."""
     df = raw.copy()
     title_text = ""
     if len(df) >= 1:
         first_row = df.iloc[0].tolist()
-        title_text = " ".join([str(x) for x in first_row if x not in (None, "")]).strip()
-    if len(df) >= 2:
-        header_row = df.iloc[0].tolist()
-        if any(str(c).startswith("Unnamed:") for c in df.columns) or "순번" not in map(str, df.columns):
-            df = df.iloc[1:].copy()
-            df.columns = header_row
+        title_text = " ".join([str(x) for x in first_row if str(x).strip() and str(x).strip().lower() != "nan"]).strip()
+
+    # Case 1: pandas already used the correct header row.
+    if _looks_like_header(list(df.columns)):
+        return df, title_text
+
+    # Case 2: title row exists and actual header is one of the first few rows.
+    scan_limit = min(8, len(df))
+    for idx in range(scan_limit):
+        row_values = df.iloc[idx].tolist()
+        if _looks_like_header(row_values):
+            out = df.iloc[idx + 1:].copy()
+            out.columns = row_values
+            return out, title_text
+
+    return df, title_text
+
+def _sheet_has_required_template(raw: pd.DataFrame) -> bool:
+    prepared, _ = _prepare_sheet_dataframe(raw)
+    cols = list(prepared.columns)
+    return all(find_alias(cols, canonical) is not None for canonical in REQUIRED_RESULT_COLUMNS)
+
+def pick_result_sheets(xls: pd.ExcelFile):
+    valid = []
+    for sheet in xls.sheet_names:
+        if not _is_result_sheet_name(sheet):
+            continue
+        try:
+            preview = pd.read_excel(xls, sheet_name=sheet, nrows=10)
+            if _sheet_has_required_template(preview):
+                valid.append(sheet)
+        except Exception as exc:
+            log(f"시트 검증 실패: {sheet} / {exc}")
+    return valid
+
+def infer_year_from_sheet_name(sheet_name: str, title_cell: str = "") -> int:
+    # 기간 산정은 실사기간을 절대 사용하지 않는다. 시트명 연도가 기준이다.
+    year = _sheet_year_from_name(sheet_name)
+    if year:
+        return year
+    text = f"{sheet_name} {title_cell}"
+    m = re.search(r"(20\d{2})", text)
+    return int(m.group(1)) if m else datetime.now().year
+
+def _parse_registration_month(value) -> int | None:
+    """Extract month from 등록월. Registration year is intentionally ignored."""
+    s = str(value or "").strip()
+    if not s or s.lower() in {"nan", "nat", "none"}:
+        return None
+    nums = [int(x) for x in re.findall(r"\d{1,4}", s)]
+    if not nums:
+        return None
+    # If registration month accidentally contains a year, ignore the year and use the following month.
+    if nums[0] >= 1900 and len(nums) >= 2:
+        month = nums[1]
+    else:
+        month = nums[0]
+    return month if 1 <= month <= 12 else None
+
+def _parse_registration_day(value) -> int:
+    s = str(value or "").strip()
+    nums = [int(x) for x in re.findall(r"\d{1,4}", s)]
+    if not nums:
+        return 1
+    if nums[0] >= 1900:
+        day = nums[2] if len(nums) >= 3 else 1
+    else:
+        day = nums[1] if len(nums) >= 2 else 1
+    return day if 1 <= day <= 31 else 1
+
+def _make_registration_datetime(sheet_year: int, reg_value) -> pd.Timestamp:
+    month = _parse_registration_month(reg_value)
+    if month is None:
+        return pd.NaT
+    day = _parse_registration_day(reg_value)
+    try:
+        return pd.Timestamp(year=int(sheet_year), month=int(month), day=int(day))
+    except Exception:
+        return pd.Timestamp(year=int(sheet_year), month=int(month), day=1)
+
+def clean_sheet(raw: pd.DataFrame, sheet_name: str) -> pd.DataFrame:
+    df, title_text = _prepare_sheet_dataframe(raw)
     rename_map = {}
     for canonical in ALIASES:
         found = find_alias(df.columns, canonical)
         if found is not None:
             rename_map[found] = canonical
     df = df.rename(columns=rename_map)
-    for col in ["순번", "등록월", "제조업체명", "유형", "완제제형", "실사방식", "실사기간", "등급", "지적사항 요약", "감시분야"]:
-        if col not in df.columns:
-            df[col] = ""
+    missing_required = [c for c in REQUIRED_RESULT_COLUMNS if c not in df.columns]
+    if missing_required:
+        log(f"유효하지 않은 실태조사 시트 제외: {sheet_name} / 누락 컬럼: {', '.join(missing_required)}")
+        return pd.DataFrame(columns=REQUIRED_RESULT_COLUMNS)
     df = df.fillna("")
     for col in ["등록월", "제조업체명", "유형", "완제제형", "실사방식", "실사기간"]:
         df[col] = df[col].replace("", pd.NA).ffill().fillna("")
     key_cols = ["제조업체명", "지적사항 요약", "감시분야", "등급"]
     df = df[~df[key_cols].apply(lambda s: s.astype(str).str.strip().eq("").all(), axis=1)].copy()
-    year = infer_year_from_sheet_name(sheet_name, title_text)
-    month_num = pd.to_numeric(df["등록월"].astype(str).str.extract(r"(\d{1,2})", expand=False), errors="coerce")
-    df["연도"] = year
-    df["등록월_num"] = month_num
-    df["분기"] = ((month_num - 1) // 3 + 1).astype("Int64")
+
+    sheet_year = infer_year_from_sheet_name(sheet_name, title_text)
+    month_num = df["등록월"].map(_parse_registration_month)
+    df["시트명"] = sheet_name
+    df["시트기준연도"] = int(sheet_year)
+    df["연도"] = int(sheet_year)
+    df["등록월_num"] = pd.to_numeric(month_num, errors="coerce").astype("Int64")
+    df["분기"] = ((df["등록월_num"] - 1) // 3 + 1).astype("Int64")
     df["연도분기"] = df["연도"].astype(str) + "-" + df["분기"].astype("Int64").astype(str) + "Q"
     for col in ["제조업체명", "유형", "완제제형", "실사방식", "실사기간", "등급", "지적사항 요약", "감시분야"]:
         df[col] = df[col].astype(str).str.strip()
     df["감시분야"] = df["감시분야"].map(normalize_field)
     df["등급"] = df["등급"].map(normalize_grade)
-    raw_date = df["등록월"].astype(str).str.strip()
-    date_text = (
-        raw_date
-        .str.replace(".", "-", regex=False)
-        .str.replace("/", "-", regex=False)
-        .str.replace("년", "-", regex=False)
-        .str.replace("월", "", regex=False)
-        .str.replace("일", "", regex=False)
-        .str.replace(r"\s+", "", regex=True)
-    )
-    df["등록일자_dt"] = pd.to_datetime(date_text, errors="coerce")
-    df["실사연월"] = df["실사기간"].map(extract_year_month_from_period)
+    df["등록일자_dt"] = df["등록월"].map(lambda v: _make_registration_datetime(sheet_year, v))
+    df["실사연월"] = df["실사기간"].map(extract_year_month_from_period)  # 표시/검색용. 기간 산정에는 사용하지 않음.
     df = df.reset_index(drop=True)
     df["원본순서"] = range(1, len(df) + 1)
     df["순번"] = range(1, len(df) + 1)
@@ -609,6 +699,7 @@ def _is_assignment_pending(rec: dict | str | None) -> bool:
 # ---------------------------------------------------------------------
 ASSIGNMENT_SCHEMA_VERSION = "1.1"
 ROW_ID_FIELDS = [
+    "시트기준연도",
     "등록월",
     "제조업체명",
     "실사기간",
@@ -1340,6 +1431,8 @@ def _build_assignment_record(row, topic: str, source: str, filename: str = "", s
         "created_at": _now_kst().strftime("%Y-%m-%d %H:%M:%S KST"),
         "first_seen_batch": batch_id,
         "filename": filename,
+        "시트기준연도": _clean_identity_value(row.get("시트기준연도", row.get("연도", ""))),
+        "시트명": _clean_identity_value(row.get("시트명", "")),
         "등록월": _clean_identity_value(row.get("등록월", "")),
         "제조업체명": _clean_identity_value(row.get("제조업체명", "")),
         "실사기간": _clean_identity_value(row.get("실사기간", "")),
