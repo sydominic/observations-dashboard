@@ -1883,14 +1883,51 @@ def apply_filters(df: pd.DataFrame) -> pd.DataFrame:
     return w
 
 def get_count_frames(df: pd.DataFrame):
-    actual = df[df["지적사항 요약"].map(is_real_finding)].copy()
-    if not actual.empty:
-        actual["감시분야"] = actual["감시분야"].map(normalize_field)
-        actual["등급"] = actual["등급"].map(normalize_grade)
+    """Return actual finding rows and count frames without failing on empty search results.
+
+    v23 fix:
+    - Keyword/sidebar filters can legitimately return 0 rows.
+    - In that case the dashboard should show an empty-result message, not KeyError.
+    - Missing optional columns are created as empty columns before counting.
+    """
+    if df is None or not isinstance(df, pd.DataFrame):
+        df = pd.DataFrame()
+
+    base = df.copy()
+    for col in ["지적사항 요약", "감시분야", "등급"]:
+        if col not in base.columns:
+            base[col] = ""
+
+    if base.empty:
+        actual = base.copy()
+        return (
+            actual,
+            pd.DataFrame({"감시분야": [], "건수": []}),
+            pd.DataFrame({"등급": [], "건수": []}),
+        )
+
+    actual = base[base["지적사항 요약"].map(is_real_finding)].copy()
+    for col in ["감시분야", "등급"]:
+        if col not in actual.columns:
+            actual[col] = ""
+
+    if actual.empty:
+        return (
+            actual,
+            pd.DataFrame({"감시분야": [], "건수": []}),
+            pd.DataFrame({"등급": [], "건수": []}),
+        )
+
+    actual["감시분야"] = actual["감시분야"].map(normalize_field)
+    actual["등급"] = actual["등급"].map(normalize_grade)
+
     fcounts = actual["감시분야"].astype(str).str.strip().value_counts()
     gcounts = actual["등급"].astype(str).str.strip().value_counts()
     field_index = FIELD_ORDER + [x for x in fcounts.index.tolist() if x not in FIELD_ORDER and x]
+    field_index = [x for x in field_index if int(fcounts.get(x, 0)) > 0]
     grade_index = [x for x in GRADE_ORDER if x in gcounts.index.tolist()] + [x for x in gcounts.index.tolist() if x not in GRADE_ORDER and x]
+    grade_index = [x for x in grade_index if int(gcounts.get(x, 0)) > 0]
+
     field_df = pd.DataFrame({"감시분야": field_index, "건수": [int(fcounts.get(x, 0)) for x in field_index]})
     grade_df = pd.DataFrame({"등급": grade_index, "건수": [int(gcounts.get(x, 0)) for x in grade_index]})
     return actual, field_df, grade_df
@@ -5026,8 +5063,11 @@ def main():
     _restore_active_tab_from_query()
     with observation_tab:
         c1, c2 = st.columns(2)
-        c1.metric("제조업체 수", f"{w['제조업체명'].astype(str).replace('', pd.NA).dropna().nunique():,}")
+        mfg_count = w["제조업체명"].astype(str).replace("", pd.NA).dropna().nunique() if "제조업체명" in w.columns else 0
+        c1.metric("제조업체 수", f"{mfg_count:,}")
         c2.metric("지적사항 건 수", f"{len(actual):,}")
+        if w.empty or actual.empty:
+            st.info("선택한 기간/필터/키워드에 해당하는 지적사항이 없습니다. 필터 조건을 조정하십시오.")
         row1c1, row1c2 = st.columns([1.0, 1.0])
         if not field_df.empty:
             row1c1.plotly_chart(make_bar(field_df, "감시분야", "감시분야별 건수"), use_container_width=True)
@@ -5049,8 +5089,11 @@ def main():
         st.caption("선택한 기간(분기/연간) 기준으로 3페이지 PDF Letter를 생성합니다. 1페이지는 분석 요약문, 2페이지는 Top5 표와 보조 요약정보, 3페이지는 감시분야/등급 그래프입니다.")
         if period_opts and selected_period:
             pf = filter_by_period(w_base, selected_period).copy()
-            pdf_bytes = cached_report_pdf(pf, selected_period)
-            st.download_button(
+            if pf.empty:
+                st.info("선택한 기간/필터/키워드에 해당하는 데이터가 없어 리포트 다운로드를 비활성화했습니다.")
+            else:
+                pdf_bytes = cached_report_pdf(pf, selected_period)
+                st.download_button(
                 label=f"📄 식약처 의약품 GMP 실태조사 Letter 다운로드 ({selected_period})",
                 data=pdf_bytes,
                 file_name=f"{selected_period}_dashboard_report.pdf",
