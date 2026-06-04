@@ -1,0 +1,9 @@
+# V25 - Period state fix after V24
+
+- 기간 선택 상태를 selected_period_global_v25 하나로 통합했습니다.
+- 과거 v9/v10/v24 기간 session_state 값을 복구 후보로 사용하지 않도록 차단했습니다.
+- stale URL query parameter(period=2026-1Q 등)가 사용자가 선택한 기간을 계속 덮어쓰지 않도록 수정했습니다.
+- 현재 날짜 기준 분기는 최초 진입 기본값으로만 사용합니다.
+- 제조처 순위 카드 클릭 시에만 mfg_company + active_tab=manufacturer + period/mfg_period 조합을 navigation event로 인정합니다.
+- Observation / Manufacturer / Analysis Report 3개 탭은 동일 selected_period 값을 사용합니다.
+- 분류 규칙, topic_assignments 저장/잠금 로직, row_id 생성 방식은 변경하지 않았습니다.

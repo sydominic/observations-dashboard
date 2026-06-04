@@ -2948,10 +2948,12 @@ def _query_param_first_value(name: str) -> str:
 def _render_global_period_selector(df: pd.DataFrame) -> tuple[str | None, list[str]]:
     """One shared period selector for Observation, Manufacturer, Report and detail views.
 
-    v24 rule:
-    - Current KST quarter is only the first-entry default.
-    - Once a user selects another period, card clicks/admin saves/reruns must keep that period.
-    - Manufacturer card URL values (period/mfg_period) are respected before falling back to current quarter.
+    v25 rule:
+    - Current KST quarter is the first-entry default.
+    - Old URL/session values must not keep forcing the screen back to 1Q.
+    - A user-selected period is the primary state after initial load.
+    - Manufacturer card links may pass period/mfg_period, but only as a navigation event,
+      not as a value that overrides the selectbox on every rerun.
     """
     period_opts = available_periods(df)
     if not period_opts:
@@ -2959,25 +2961,45 @@ def _render_global_period_selector(df: pd.DataFrame) -> tuple[str | None, list[s
         return None, []
 
     default_period = _default_dashboard_period(period_opts)
-    key = "selected_period_global_v24"
+    key = "selected_period_global_v25"
 
     query_period = _query_param_first_value("period") or _query_param_first_value("mfg_period")
-    legacy_candidates = [
-        st.session_state.get(key),
-        st.session_state.get("selected_period_global_v10"),
-        st.session_state.get("selected_period_global_v9"),
-        st.session_state.get("selected_period_main_tab"),
-        st.session_state.get("selected_period_manufacturer_tab"),
-    ]
+    active_tab = _query_param_first_value("active_tab")
+    query_company = _query_param_first_value("mfg_company")
 
-    if query_period in period_opts:
-        st.session_state[key] = query_period
-    elif st.session_state.get(key) not in period_opts:
-        recovered = next((p for p in legacy_candidates if p in period_opts), None)
-        st.session_state[key] = recovered or default_period
+    # Only a clear manufacturer-card/navigation URL is allowed to initialize or switch the period.
+    # This prevents stale "?period=2026-1Q" from forcing the dashboard back to 1Q.
+    query_is_mfg_navigation = (
+        query_period in period_opts
+        and str(active_tab).strip().lower() == "manufacturer"
+        and bool(str(query_company).strip())
+    )
+    query_signature = f"{active_tab}|{query_company}|{query_period}"
+    consumed_key = "selected_period_query_consumed_signature_v25"
 
-    for legacy_key in ("selected_period_global_v10", "selected_period_global_v9", "selected_period_main_tab", "selected_period_manufacturer_tab"):
-        if st.session_state.get(legacy_key) not in period_opts:
+    current_value = st.session_state.get(key)
+
+    # First load or invalid state: default to current quarter, unless a valid manufacturer-card navigation is present.
+    if current_value not in period_opts:
+        st.session_state[key] = query_period if query_is_mfg_navigation else default_period
+        if query_is_mfg_navigation:
+            st.session_state[consumed_key] = query_signature
+    else:
+        # If the user clicked a different manufacturer card carrying a period, consume that navigation once.
+        already_consumed = st.session_state.get(consumed_key)
+        if query_is_mfg_navigation and query_signature != already_consumed and query_period != current_value:
+            st.session_state[key] = query_period
+            st.session_state[consumed_key] = query_signature
+
+    # Drop old period keys so stale v9/v10/v24 values cannot be recovered as "user choice".
+    for legacy_key in (
+        "selected_period_global_v24",
+        "selected_period_global_v10",
+        "selected_period_global_v9",
+        "selected_period_main_tab",
+        "selected_period_manufacturer_tab",
+    ):
+        if legacy_key in st.session_state:
             st.session_state.pop(legacy_key, None)
 
     top_cols = st.columns([7.0, 2.0])
@@ -2993,8 +3015,13 @@ def _render_global_period_selector(df: pd.DataFrame) -> tuple[str | None, list[s
         if st.button("새로고침", key="global_period_refresh_btn", use_container_width=True):
             st.rerun()
 
+    # Single source of truth for all tabs.
+    selected_period = st.session_state.get(key, selected_period)
     st.session_state["selected_period_main_tab"] = selected_period
     st.session_state["selected_period_manufacturer_tab"] = selected_period
+
+    # Keep URL in sync with the actual selected value after widget interaction.
+    # This makes card clicks/share links consistent but does not let stale query params override the widget.
     try:
         if st.query_params.get("period") != selected_period:
             st.query_params["period"] = selected_period
@@ -3002,6 +3029,7 @@ def _render_global_period_selector(df: pd.DataFrame) -> tuple[str | None, list[s
             st.query_params["mfg_period"] = selected_period
     except Exception:
         pass
+
     return selected_period, period_opts
 
 
