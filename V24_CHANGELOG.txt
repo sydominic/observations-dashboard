@@ -1,0 +1,14 @@
+# V24 - Period state stabilization and classification baseline lock
+
+- 기간 선택 상태를 안정화했습니다.
+  - 현재 날짜 기준 분기는 최초 기본값으로만 사용합니다.
+  - 사용자가 선택한 기간은 카드 클릭, 관리자 저장, rerun 후에도 유지합니다.
+  - Manufacturer 카드 URL의 period/mfg_period 값을 상단 공통 기간 선택에 반영합니다.
+- Manufacturer 순위 카드 클릭 시 현재 선택 기간이 유지되도록 링크에 period와 mfg_period를 함께 전달합니다.
+- 기존 row_id에 저장된 분류값은 상태가 pending_review여도 더 이상 PY/JSON 규칙으로 재분류하지 않습니다.
+- 신규 row_id에 대해서만 자동분류 후 pending_review로 저장합니다.
+- 관리자 전용 “분류 기준선 잠금/진단” 패널을 추가했습니다.
+  - 현재 전체 분류 기준선 확정 버튼을 통해 현재 workbook의 분류를 confirmed_baseline으로 잠글 수 있습니다.
+  - 기준선 확정 전 topic_assignments 백업 JSON을 Supabase Storage에 저장합니다.
+  - 현재행/매칭/미저장/pending/manual/baseline/orphan 진단값을 표시합니다.
+- 분류 규칙 자체는 변경하지 않았습니다.

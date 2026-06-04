@@ -723,7 +723,7 @@ def _make_upload_batch_id() -> str:
     return _now_kst().strftime("%Y%m%d_%H%M%S")
 
 
-CONFIRMED_ASSIGNMENT_STATUSES = {"confirmed", "manual_confirmed", "legacy_confirmed"}
+CONFIRMED_ASSIGNMENT_STATUSES = {"confirmed", "manual_confirmed", "legacy_confirmed", "confirmed_baseline"}
 PENDING_ASSIGNMENT_STATUSES = {"pending_review", "auto_pending", "py_auto_pending"}
 
 
@@ -755,7 +755,7 @@ def _is_assignment_pending(rec: dict | str | None) -> bool:
 # ---------------------------------------------------------------------
 # Persistent topic learning / row-level assignment
 # ---------------------------------------------------------------------
-ASSIGNMENT_SCHEMA_VERSION = "1.1"
+ASSIGNMENT_SCHEMA_VERSION = "1.2"
 ROW_ID_FIELDS = [
     "시트기준연도",
     "등록월",
@@ -1289,6 +1289,142 @@ def _load_latest_admin_df(cfg: dict[str, str]) -> pd.DataFrame:
     return df
 
 
+def _assignment_diagnostics_for_current_df(cfg: dict[str, str]) -> dict:
+    df_latest = _load_latest_admin_df(cfg)
+    store = _load_assignment_store(cfg)
+    rows = store.get("rows", {}) if isinstance(store, dict) else {}
+    rows = rows if isinstance(rows, dict) else {}
+    current_ids = set(df_latest["_row_id"].astype(str).tolist()) if (df_latest is not None and not df_latest.empty and "_row_id" in df_latest.columns) else set()
+    status_counts = {"manual_confirmed": 0, "confirmed_baseline": 0, "confirmed": 0, "legacy_confirmed": 0, "pending_review": 0, "untracked": 0, "other": 0}
+    for rid in current_ids:
+        rec = rows.get(rid)
+        if not rec:
+            status_counts["untracked"] += 1
+            continue
+        status = _assignment_status(rec)
+        if status in status_counts:
+            status_counts[status] += 1
+        elif status in PENDING_ASSIGNMENT_STATUSES:
+            status_counts["pending_review"] += 1
+        else:
+            status_counts["other"] += 1
+    return {
+        "current_rows": int(len(current_ids)),
+        "assignment_rows_total": int(len(rows)),
+        "matched_rows": int(sum(1 for rid in current_ids if rid in rows)),
+        "untracked_rows": int(status_counts.get("untracked", 0)),
+        "orphan_rows": int(len(set(map(str, rows.keys())) - current_ids)),
+        "status_counts": status_counts,
+    }
+
+
+def _backup_assignment_store(cfg: dict[str, str], store: dict) -> str:
+    ts = _now_kst().strftime("%Y%m%d_%H%M%S")
+    object_name = f"topic_assignments_backup_{ts}.json"
+    payload = json.dumps(store, ensure_ascii=False, indent=2).encode("utf-8")
+    if _storage_ready(cfg):
+        _storage_upload_bytes(cfg, object_name, payload, "application/json; charset=utf-8")
+    return object_name
+
+
+def _baseline_confirm_current_assignments(cfg: dict[str, str]) -> dict:
+    """Lock the current workbook's displayed/current topic assignments as the baseline.
+
+    This does not apply new PY/JSON rules to existing rows. It preserves any existing
+    topic assignment and only fills missing row_id topics from the current engine.
+    """
+    df_latest = _load_latest_admin_df(cfg)
+    if df_latest is None or df_latest.empty or "_row_id" not in df_latest.columns:
+        return {"locked": 0, "created": 0, "backup": "", "error": "현재 엑셀 데이터를 불러오지 못했습니다."}
+
+    store = _load_assignment_store(cfg)
+    rows = store.setdefault("rows", {})
+    if not isinstance(rows, dict):
+        rows = {}
+        store["rows"] = rows
+
+    backup_name = _backup_assignment_store(cfg, store)
+    now = _now_kst().strftime("%Y-%m-%d %H:%M:%S KST")
+    locked = 0
+    created = 0
+    skipped = 0
+
+    # Ensure session maps reflect the current store for any fallback topic calculation.
+    st.session_state["topic_assignments_store"] = store
+    st.session_state["topic_assignments_map"] = _assignment_topic_map(store)
+    st.session_state["topic_assignments_status_map"] = _assignment_status_map(store)
+    st.session_state["topic_assignments_record_map"] = _assignment_record_map(store)
+
+    for _, row in df_latest.iterrows():
+        if not is_real_finding(row.get("지적사항 요약", "")):
+            skipped += 1
+            continue
+        rid = str(row.get("_row_id", "")).strip() or make_observation_row_id(row)
+        existing = rows.get(rid, {})
+        rec = _normalize_assignment_record(existing) if existing else {}
+        topic = str(rec.get("topic", "")).strip()
+        if not topic:
+            topic = infer_topic_from_row(row) or _infer_topic_from_row_base(row) or "세부 항목 관리"
+            rec = _build_assignment_record(row, topic, "baseline_created_from_current_view", filename=str(store.get("last_upload_filename", "")), status="confirmed_baseline", batch_id=str(store.get("last_upload_batch_id", "")))
+            created += 1
+        else:
+            # Preserve the topic exactly; only convert non-manual statuses into baseline lock.
+            if not rec:
+                rec = _build_assignment_record(row, topic, "baseline_created_from_existing_topic", filename=str(store.get("last_upload_filename", "")), status="confirmed_baseline", batch_id=str(store.get("last_upload_batch_id", "")))
+                created += 1
+
+        old_status = _assignment_status(rec)
+        old_source = str(rec.get("source", "")).strip()
+        if old_status == "manual_confirmed" or old_source.startswith("admin_manual"):
+            rec["status"] = "manual_confirmed"
+            rec["source"] = old_source or "admin_manual_edit"
+        else:
+            rec["status"] = "confirmed_baseline"
+            rec["source"] = old_source or "baseline_lock_current_classification"
+        rec["locked"] = True
+        rec["baseline_confirmed_at"] = now
+        rec["baseline_confirmed_by"] = "admin_upload"
+        rec["last_seen_at"] = now
+        rows[rid] = rec
+        locked += 1
+
+    store["baseline_confirmed_at"] = now
+    store["baseline_confirmed_rows"] = int(locked)
+    store["baseline_created_rows"] = int(created)
+    store["baseline_backup_object"] = backup_name
+    store["baseline_note"] = "v24: Current workbook classifications locked. Existing row topics must not be reclassified on upload."
+    _save_assignment_store(cfg, store)
+    return {"locked": int(locked), "created": int(created), "skipped": int(skipped), "backup": backup_name, "error": ""}
+
+
+def _render_assignment_baseline_panel(cfg: dict[str, str], admin_ok: bool) -> None:
+    if not admin_ok:
+        return
+    with st.expander("분류 기준선 잠금/진단", expanded=False):
+        st.caption("현재 엑셀의 row_id별 분류를 기준선으로 잠급니다. 이 작업 후 기존 row_id는 업로드해도 자동 재분류하지 않습니다.")
+        diag = _assignment_diagnostics_for_current_df(cfg)
+        sc = diag.get("status_counts", {})
+        st.write(
+            f"현재행 {diag.get('current_rows', 0):,} / 매칭 {diag.get('matched_rows', 0):,} / "
+            f"미저장 {diag.get('untracked_rows', 0):,} / pending {sc.get('pending_review', 0):,} / "
+            f"manual {sc.get('manual_confirmed', 0):,} / baseline {sc.get('confirmed_baseline', 0):,} / orphan {diag.get('orphan_rows', 0):,}"
+        )
+        confirm = st.checkbox(
+            "현재 화면/저장값의 전체 분류를 정답 기준선으로 확정합니다.",
+            key="confirm_baseline_lock_v24",
+        )
+        if st.button("현재 전체 분류 기준선 확정", key="btn_baseline_lock_v24", type="secondary", disabled=not confirm):
+            result = _baseline_confirm_current_assignments(cfg)
+            if result.get("error"):
+                st.error(result.get("error"))
+            else:
+                st.success(
+                    f"현재 분류 기준선 확정 완료: {result.get('locked', 0):,}건 잠금 / "
+                    f"신규 저장 {result.get('created', 0):,}건 / 백업 {result.get('backup', '-') }"
+                )
+                st.rerun()
+
+
 def _render_pending_review_editor(cfg: dict[str, str], batch_id: str | None, admin_ok: bool) -> None:
     """Admin-only topic review/editor.
 
@@ -1523,11 +1659,12 @@ def _apply_persistent_topic_assignments(df: pd.DataFrame, cfg: dict[str, str]) -
 
 
 def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, str], filename: str, batch_id: str | None = None) -> tuple[dict, int, int, int]:
-    """Classify newly seen rows as pending_review and keep confirmed rows locked.
+    """Create assignments for newly seen rows and never change existing row topics.
 
-    Existing confirmed/manual_confirmed rows are never reclassified. Existing
-    pending_review rows may be re-evaluated when PY rules are upgraded. New rows
-    are saved as pending_review until an authenticated admin confirms the upload.
+    v24 rule:
+    - If row_id already exists and has a topic, keep that topic exactly as-is.
+    - Existing rows are not reclassified even if status is pending_review.
+    - Only new row_id values get automatic classification and pending_review status.
     """
     store = _load_assignment_store(cfg)
     _load_runtime_learning_store(cfg)
@@ -1539,12 +1676,21 @@ def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, 
 
     batch_id = batch_id or _make_upload_batch_id()
     added = 0
-    updated_pending = 0
 
     for _, row in check_df.iterrows():
         if not is_real_finding(row.get("지적사항 요약", "")):
             continue
         row_id = make_observation_row_id(row)
+
+        if row_id in rows:
+            rec = _normalize_assignment_record(rows[row_id])
+            # Do not change the existing topic. Only refresh trace metadata.
+            rec["last_seen_batch"] = batch_id
+            rec["last_seen_at"] = _now_kst().strftime("%Y-%m-%d %H:%M:%S KST")
+            rec["filename"] = filename or rec.get("filename", "")
+            rows[row_id] = rec
+            continue
+
         runtime_topic = _runtime_topic_override(
             row.get("감시분야", ""),
             row.get("지적사항 요약", ""),
@@ -1558,35 +1704,13 @@ def _prepare_assignments_for_uploaded_df(check_df: pd.DataFrame, cfg: dict[str, 
             row.get("2차 구분 (참고)", ""),
         )
         topic = runtime_topic or priority_topic or _infer_topic_from_row_base(row) or "세부 항목 관리"
-
-        if row_id in rows:
-            rec = _normalize_assignment_record(rows[row_id])
-            if _is_assignment_confirmed(rec):
-                rows[row_id] = rec
-                continue
-            # pending_review is intentionally re-evaluated when the PY rules improve.
-            old_topic = str(rec.get("topic", "")).strip()
-            rec.update({
-                "topic": topic,
-                "status": "pending_review",
-                "locked": False,
-                "source": "py_auto_pending",
-                "updated_at": _now_kst().strftime("%Y-%m-%d %H:%M:%S KST"),
-                "last_seen_batch": batch_id,
-                "filename": filename,
-            })
-            rows[row_id] = rec
-            if old_topic != topic:
-                updated_pending += 1
-            continue
-
         rows[row_id] = _build_assignment_record(row, topic, "py_auto_pending", filename, status="pending_review", batch_id=batch_id)
         added += 1
 
     store["last_upload_batch_id"] = batch_id
     store["last_upload_filename"] = filename
     store["last_pending_added"] = int(added)
-    store["last_pending_reclassified"] = int(updated_pending)
+    store["last_pending_reclassified"] = 0
     _save_assignment_store(cfg, store)
     pending_count = _count_pending_for_batch(store, batch_id)
     return store, before_count, added, pending_count
@@ -1715,6 +1839,7 @@ def _render_data_source_panel() -> tuple[bytes | None, dict, str]:
                 else:
                     st.caption("이번 업로드 기준 신규 검토 대기 항목은 없습니다. 필요한 경우 아래 분류 검토/수정에서 전체 검색으로 수정할 수 있습니다.")
             _render_pending_review_editor(cfg, confirm_batch_id, admin_ok)
+            _render_assignment_baseline_panel(cfg, admin_ok)
 
             new_file = st.file_uploader("최신 GMP 실태조사 엑셀 업로드", type=["xlsx"], key="admin_latest_xlsx")
             if new_file is not None:
@@ -2670,8 +2795,8 @@ def _infer_topic_from_row_base(row) -> str:
 
 
 def infer_topic_from_row(row) -> str:
-    # 0) Confirmed/manual-confirmed row_id wins. Pending rows are intentionally
-    #    re-evaluated so upgraded PY rules can correct unreviewed auto results.
+    # v24: If a row_id already has any stored assignment topic, that stored topic wins.
+    # This prevents reviewed classifications from changing due to later PY/JSON rule changes.
     row_id = str(row.get("_row_id", "")).strip()
     if not row_id:
         try:
@@ -2680,17 +2805,11 @@ def infer_topic_from_row(row) -> str:
             row_id = ""
     if row_id:
         topic_map = st.session_state.get("topic_assignments_map", {})
-        status_map = st.session_state.get("topic_assignments_status_map", {})
         topic = str(topic_map.get(row_id, "")).strip() if isinstance(topic_map, dict) else ""
-        status = str(status_map.get(row_id, "")).strip() if isinstance(status_map, dict) else ""
-        if topic and status in CONFIRMED_ASSIGNMENT_STATUSES:
-            return topic
-        record_map = st.session_state.get("topic_assignments_record_map", {})
-        rec = record_map.get(row_id, {}) if isinstance(record_map, dict) else {}
-        if topic and status in PENDING_ASSIGNMENT_STATUSES and isinstance(rec, dict) and str(rec.get("source", "")).startswith("admin_manual_edit"):
+        if topic:
             return topic
 
-    # 1) New or pending_review row: admin-learned active rules and upgraded PY priority rules run before the base engine.
+    # New rows with no stored assignment still use runtime learning + PY/base rules.
     runtime_topic = _runtime_topic_override(
         row.get("감시분야", ""),
         row.get("지적사항 요약", ""),
@@ -2709,7 +2828,6 @@ def infer_topic_from_row(row) -> str:
     if priority_topic:
         return priority_topic
 
-    # 2) Fallback for new/pending rows: use the current built-in/JSON topic engine.
     return _infer_topic_from_row_base(row)
 
 
@@ -2817,22 +2935,48 @@ def _default_dashboard_period(period_opts: list[str]) -> str | None:
     return sorted(period_opts, key=_period_sort_key)[-1]
 
 
+def _query_param_first_value(name: str) -> str:
+    try:
+        value = st.query_params.get(name)
+        if isinstance(value, list):
+            return str(value[0]) if value else ""
+        return str(value or "")
+    except Exception:
+        return ""
+
+
 def _render_global_period_selector(df: pd.DataFrame) -> tuple[str | None, list[str]]:
-    """One shared period selector for Observation, Manufacturer, Report and detail views."""
+    """One shared period selector for Observation, Manufacturer, Report and detail views.
+
+    v24 rule:
+    - Current KST quarter is only the first-entry default.
+    - Once a user selects another period, card clicks/admin saves/reruns must keep that period.
+    - Manufacturer card URL values (period/mfg_period) are respected before falling back to current quarter.
+    """
     period_opts = available_periods(df)
     if not period_opts:
         st.info("기간 데이터가 없습니다.")
         return None, []
 
     default_period = _default_dashboard_period(period_opts)
+    key = "selected_period_global_v24"
 
-    # v10: do not let stale query params or old browser session values force 1Q on initial load.
-    # The initial default is always current KST quarter when present; otherwise latest data quarter.
-    key = "selected_period_global_v10"
-    if key not in st.session_state or st.session_state.get(key) not in period_opts:
-        st.session_state[key] = default_period
-    # Clear stale legacy keys that could have preserved a previous 1Q value across deployments.
-    for legacy_key in ("selected_period_global_v9", "selected_period_main_tab", "selected_period_manufacturer_tab"):
+    query_period = _query_param_first_value("period") or _query_param_first_value("mfg_period")
+    legacy_candidates = [
+        st.session_state.get(key),
+        st.session_state.get("selected_period_global_v10"),
+        st.session_state.get("selected_period_global_v9"),
+        st.session_state.get("selected_period_main_tab"),
+        st.session_state.get("selected_period_manufacturer_tab"),
+    ]
+
+    if query_period in period_opts:
+        st.session_state[key] = query_period
+    elif st.session_state.get(key) not in period_opts:
+        recovered = next((p for p in legacy_candidates if p in period_opts), None)
+        st.session_state[key] = recovered or default_period
+
+    for legacy_key in ("selected_period_global_v10", "selected_period_global_v9", "selected_period_main_tab", "selected_period_manufacturer_tab"):
         if st.session_state.get(legacy_key) not in period_opts:
             st.session_state.pop(legacy_key, None)
 
@@ -2849,7 +2993,6 @@ def _render_global_period_selector(df: pd.DataFrame) -> tuple[str | None, list[s
         if st.button("새로고침", key="global_period_refresh_btn", use_container_width=True):
             st.rerun()
 
-    # Keep legacy keys/query params synchronized for existing report/manufacturer links.
     st.session_state["selected_period_main_tab"] = selected_period
     st.session_state["selected_period_manufacturer_tab"] = selected_period
     try:
@@ -4551,8 +4694,8 @@ def render_manufacturer_dashboard(df: pd.DataFrame, selected_period_override: st
         company = row["제조업체명"]
         card_class = "mfg-card-selected" if company == current_company else "mfg-card"
         current_period_q = quote(str(selected_period))
-        href = f"?active_tab=manufacturer&mfg_company={quote(company)}&mfg_period={current_period_q}"
-        onclick = f"window.parent.location.search='active_tab=manufacturer&mfg_company={quote(company)}&mfg_period={current_period_q}'; return false;"
+        href = f"?active_tab=manufacturer&period={current_period_q}&mfg_period={current_period_q}&mfg_company={quote(company)}"
+        onclick = f"window.parent.location.search='active_tab=manufacturer&period={current_period_q}&mfg_period={current_period_q}&mfg_company={quote(company)}'; return false;"
         with rank_cols[idx]:
             st.markdown(f"""
             <a class='mfg-card-link' href='{href}' target='_self' onclick="{onclick}">
