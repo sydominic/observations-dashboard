@@ -3808,6 +3808,41 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         }
         return title_map.get(topic, f"{_short_topic_label(topic, 10)} 점검")
 
+    def _topic_management_impact(topic: str) -> str:
+        topic = str(topic or "").strip()
+        impact_map = {
+            "세척 밸리데이션/세척관리": "설비 사용 후 세척상태 보증, 잔류관리, 다음 제품 오염방지 흐름에 영향",
+            "회수/변경/일탈 관리": "이슈 발생 후 원인분석, 후속조치, 재발방지 완료판정 흐름에 영향",
+            "제품품질평가/PQR": "연간 품질흐름 검토, 개선 필요사항 도출, CAPA 전환 판단에 영향",
+            "시험기록/기초자료 관리": "시험결과 신뢰성, 데이터 추적성, 품질판정 근거 보존 흐름에 영향",
+            "검체채취/검체관리": "검체 대표성, 보관검체 추적성, 시험결과 재확인 가능성에 영향",
+            "제조기록서 관리": "실제 제조활동의 재현성, 배치 검토, 출하판정 근거에 영향",
+            "시설관리": "제조지원설비와 환경조건의 지속 유지, 제조환경 보증 흐름에 영향",
+            "장비 적격성평가": "설비 운전조건 보증, 변경 후 사용 적합성, 재평가 판단에 영향",
+            "보관조건/창고 관리": "원자재·제품의 보관 중 품질유지, 식별·구획·재고흐름에 영향",
+            "데이터 완전성 관리": "기록 생성·수정·검토·백업 전 과정의 신뢰성과 추적성에 영향",
+        }
+        return impact_map.get(topic, f"{topic} 관련 기준, 수행기록, 후속조치가 연결되는 품질시스템 흐름에 영향")
+    def _topic_check_documents(topic: str) -> str:
+        topic = str(topic or "").strip()
+        docs_map = {
+            "세척 밸리데이션/세척관리": "세척밸리데이션 계획·보고서, CHT/DHT 기준, 세척기록, 잔류허용기준",
+            "회수/변경/일탈 관리": "일탈보고서, 변경관리서, CAPA 완료근거, 효과확인 기록, 종료승인 근거",
+            "제품품질평가/PQR": "PQR 보고서, 입력자료 목록, 개선사항 목록, CAPA 전환 기준, 완료근거",
+            "시험기록/기초자료 관리": "시험기록서, 원자료, Audit trail, 계산·수정 이력, 검토자 확인기록",
+            "검체채취/검체관리": "검체채취기록, 보관검체 대장, 검체 라벨, 포장·보관 타당성 자료",
+            "제조기록서 관리": "제조기록서, 작업지시서, 현장기록, 검토체크리스트, 변경반영 이력",
+            "시설관리": "용수·가스·공조 점검기록, 유지보수 이력, 기준서, 경향분석 자료",
+            "장비 적격성평가": "URS/DQ/IQ/OQ/PQ, 재적격성평가 기준, 변경 영향평가, 운전조건 근거",
+            "보관조건/창고 관리": "입출고 대장, 온습도 기록, 구획·라벨 기준, 재고·폐기 기록",
+            "데이터 완전성 관리": "권한관리표, 백업기록, Audit trail 검토기록, 전자기록 관리기준",
+        }
+        return docs_map.get(topic, f"{topic} 관련 기준서, 수행기록, 검토기록, 후속조치 완료근거")
+    def _topic_monitoring_point(topic: str) -> str:
+        topic = str(topic or "").strip()
+        short = _short_topic_label(topic, 10)
+        return f"{short} 지적이 다음 기간에도 상위 반복유형 또는 동일 감시분야에서 반복되는지 확인"
+
     def _build_topic_counts(actual_df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
         if actual_df is None or actual_df.empty:
             return pd.DataFrame(), []
@@ -3876,6 +3911,9 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
                 "title": _topic_track_title(topic),
                 "basis": basis,
                 "point": "점검: " + _topic_action_text(topic),
+                "impact": _topic_management_impact(topic),
+                "docs": _topic_check_documents(topic),
+                "monitoring": _topic_monitoring_point(topic),
                 "topic": topic,
                 "cnt": cnt,
             })
@@ -3889,6 +3927,9 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
                 "title": f"{fallback_field} 점검",
                 "basis": f"근거: {fallback_field} 분야 반복 지적 확인",
                 "point": "점검: 기준서, 수행기록, 후속조치의 일치성 확인",
+                "impact": f"{fallback_field} 분야의 기준, 수행기록, 후속조치가 연결되는 관리흐름에 영향",
+                "docs": f"{fallback_field} 관련 기준서, 수행기록, 검토기록, 보완조치 완료근거",
+                "monitoring": f"{fallback_field} 분야 지적이 다음 기간에도 반복되는지 확인",
                 "topic": fallback_field,
                 "cnt": 0,
             })
@@ -3904,6 +3945,11 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
             f"이번 기간 지적은 {focus_fields}에 집중되어 있으며, 종합 세부유형 기준으로 {top_topic_phrase}이 확인되었습니다. "
             "따라서 단일 항목의 보완보다 각 부서가 기준서, 실제 수행기록, 후속조치까지 이어지는 관리 흐름을 자체 점검하고 필요한 보완계획을 수립하는 방식이 필요합니다."
         )
+        monitoring_points = [
+            ("상위 세부유형 반복 여부", f"{track_topics_short}이 다음 기간에도 Top5 또는 Track에 남는지 확인"),
+            ("감시분야 집중도 변화", f"{focus_fields} 지적 비중이 유지·증가하는지 확인"),
+            ("동일 업체·부서 반복 여부", "동일 업체 또는 동일 담당부서에서 기준-실행-기록 불일치가 반복되는지 확인"),
+        ]
         metrics = {
             "total_count": total_count,
             "first_field": first_field,
@@ -3924,6 +3970,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
             "tracks": tracks,
             "steps": steps,
             "topic_df": topic_df,
+            "monitoring_points": monitoring_points,
         }
         return metrics
     def _draw_round_rect(ax, xy, w, h, facecolor="white", edgecolor="#CFD8E3", lw=0.8, radius=0.018, zorder=2, alpha=1.0):
@@ -3974,6 +4021,30 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         max_desc_lines = 3 if title_lines == 1 else 2
         wrapped_desc = _truncate_wrapped_text(wrapped_desc, max_desc_lines)
         ax.text(x + 0.018, y + 0.028, wrapped_desc, transform=ax.transAxes, fontsize=6.8, color="#111827", va="bottom", linespacing=1.12, zorder=5)
+    def _make_axes_table(ax, headers, rows, bbox, col_widths=None, fontsize=7.2, header_color="#F5F7FB", header_fs=None):
+        tbl = ax.table(
+            cellText=rows,
+            colLabels=headers,
+            cellLoc="left",
+            colLoc="center",
+            colWidths=col_widths,
+            bbox=bbox,
+            loc="upper left",
+        )
+        tbl.auto_set_font_size(False)
+        tbl.set_fontsize(fontsize)
+        for (rr, cc), cell in tbl.get_celld().items():
+            cell.set_edgecolor("#CBD5E1")
+            cell.set_linewidth(0.75)
+            cell.PAD = 0.030
+            cell.get_text().set_wrap(True)
+            if rr == 0:
+                cell.set_facecolor(header_color)
+                cell.set_text_props(weight="bold", ha="center", va="center", fontsize=(header_fs or fontsize))
+            else:
+                cell.set_facecolor((1, 1, 1, 0.70))
+                cell.set_text_props(ha="left", va="center", fontsize=fontsize)
+        return tbl
     category_col = next((c for c in ["1차 구분", "1차구분", "1차 분류"] if c in filtered.columns), None)
     category_df = pd.DataFrame(columns=["세부 구분", "건수"])
     if category_col is not None:
@@ -4021,25 +4092,78 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
                 track.get("basis", "근거: 선택 기간 반복 지적 확인"),
                 track.get("point", "점검: 기준서, 기록, 후속조치의 일치성 확인"),
             )
-        ax.text(0.000, 0.218, "권장 실행 순서", transform=ax.transAxes, fontsize=12.2, weight="bold", color="#111827", va="top")
-        step_y, step_h, step_gap = 0.030, 0.125, 0.055
-        step_w = (1.0 - step_gap * 3) / 4
-        steps = report_metrics.get("steps", [
-            (1, "기준서·SOP 확인", "반복 지적과 관련된 기준서, 절차서, 검토 기준을 먼저 확인"),
-            (2, "기록 샘플링", "상위 반복유형의 원자료와 후속조치 기록을 샘플링 검토"),
-            (3, "부서별 갭 정리", "담당부서가 기준-실행-기록 불일치와 누락 항목 자체 정리"),
-            (4, "각 부서 조치계획", "각 부서가 자체 개선계획·완료기준을 수립하고, QA는 기준·기록·CAPA 검토 지원"),
-        ])
-        for idx, (num, title, desc) in enumerate(steps):
-            x = idx * (step_w + step_gap)
-            _draw_step_card(ax, fig, x, step_y, step_w, step_h, num, title, desc)
-            if idx < len(steps) - 1:
-                ax.text(x + step_w + step_gap / 2, step_y + step_h / 2, "→", transform=ax.transAxes,
-                        fontsize=15.0, weight="bold", color="#6B7280", ha="center", va="center")
+        ax.text(0.000, 0.260, "Track 선정 근거 및 관리흐름 영향도", transform=ax.transAxes, fontsize=12.2, weight="bold", color="#111827", va="top")
+        drill_rows = []
+        for idx, track in enumerate(track_items):
+            drill_rows.append([
+                f"{track.get('label', f'Track {idx + 1}')}\\n{track.get('title', '')}",
+                _wrap_cell(str(track.get("basis", "")).replace("근거: ", ""), 34),
+                _wrap_cell(track.get("impact", ""), 46),
+            ])
+        _make_axes_table(
+            ax,
+            ["Track", "선정 근거", "관리흐름 영향도"],
+            drill_rows,
+            bbox=[0.000, 0.025, 1.000, 0.210],
+            col_widths=[0.16, 0.34, 0.50],
+            fontsize=7.35,
+            header_fs=7.6,
+        )
         _add_page_footer(fig, 1)
         pdf.savefig(fig)
         plt.close(fig)
-        # Page 2: detailed trend summary
+        # Page 2: Track check materials + next monitoring points
+        fig_drill = plt.figure(figsize=a4_landscape)
+        left_d, right_d, bottom_d, top_d = _decorate_page(fig_drill, a4_landscape)
+        content_left_d = left_d + _cm_to_fig_frac(0.18, a4_landscape, "x")
+        content_right_d = right_d - _cm_to_fig_frac(0.18, a4_landscape, "x")
+        content_bottom_d = bottom_d + _cm_to_fig_frac(0.12, a4_landscape, "y")
+        content_top_d = top_d - _cm_to_fig_frac(0.12, a4_landscape, "y")
+        ax_d = fig_drill.add_axes([content_left_d, content_bottom_d, content_right_d - content_left_d, content_top_d - content_bottom_d], zorder=2)
+        ax_d.set_facecolor("none")
+        ax_d.axis("off")
+        _draw_report_header(fig_drill, a4_landscape, left_d, right_d, top_d, period_kor, period_label, created_at, title_fs=17.0)
+        _draw_num_box(ax_d, 0.015, 0.922, 2, "#0EA5A4", box_w=0.03, box_h=0.045, fs=10.5)
+        ax_d.text(0.045, 0.938, "Track별 우선 확인자료 및 다음 기간 모니터링", transform=ax_d.transAxes, fontsize=14.5, weight="bold", va="top", color="#1F2937")
+        ax_d.text(0.000, 0.850, "Track별 우선 확인자료", transform=ax_d.transAxes, fontsize=12.2, weight="bold", color="#111827", va="top")
+        doc_rows = []
+        for idx, track in enumerate(track_items):
+            doc_rows.append([
+                f"{track.get('label', f'Track {idx + 1}')}\n{track.get('title', '')}",
+                _wrap_cell(track.get("docs", ""), 54),
+                _wrap_cell(track.get("point", "").replace("점검: ", ""), 48),
+            ])
+        _make_axes_table(
+            ax_d,
+            ["Track", "우선 확인자료", "확인 관점"],
+            doc_rows,
+            bbox=[0.000, 0.465, 1.000, 0.335],
+            col_widths=[0.16, 0.44, 0.40],
+            fontsize=7.6,
+            header_fs=7.8,
+        )
+        ax_d.text(0.000, 0.390, "다음 기간 모니터링 포인트", transform=ax_d.transAxes, fontsize=12.2, weight="bold", color="#111827", va="top")
+        monitor_rows = []
+        for title, desc in report_metrics.get("monitoring_points", []):
+            monitor_rows.append([title, _wrap_cell(desc, 72)])
+        _make_axes_table(
+            ax_d,
+            ["모니터링 포인트", "다음 기간 확인 기준"],
+            monitor_rows,
+            bbox=[0.000, 0.120, 1.000, 0.225],
+            col_widths=[0.25, 0.75],
+            fontsize=8.0,
+            header_fs=8.1,
+        )
+        ax_d.text(
+            0.000, 0.070,
+            "※ 본 페이지는 선택 기간의 상위 반복유형과 감시분야 통계를 기준으로 자동 생성되며, 기간 변경 시 Track·확인자료·모니터링 문구가 함께 갱신됩니다.",
+            transform=ax_d.transAxes, fontsize=8.1, color="#6B7280", va="top"
+        )
+        _add_page_footer(fig_drill, 2)
+        pdf.savefig(fig_drill)
+        plt.close(fig_drill)
+        # Page 3: detailed trend summary
         fig_summary = plt.figure(figsize=a4_landscape)
         left_s, right_s, bottom_s, top_s = _decorate_page(fig_summary, a4_landscape)
         content_left_s = left_s + _cm_to_fig_frac(0.18, a4_landscape, "x")
@@ -4051,7 +4175,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         ax_s.axis("off")
         _draw_report_header(fig_summary, a4_landscape, left_s, right_s, top_s, period_kor, period_label, created_at, title_fs=18.0)
         y = 0.905
-        _draw_num_box(ax_s, 0.015, y - 0.012, 2, "#1EB7B5", box_w=0.03, box_h=0.045, fs=10.5)
+        _draw_num_box(ax_s, 0.015, y - 0.012, 3, "#1EB7B5", box_w=0.03, box_h=0.045, fs=10.5)
         ax_s.text(0.045, y, "주요 지적사항 트렌드 요약", fontsize=14.5, weight="bold", va="top")
         y -= 0.045
         body_fs = 9.0
@@ -4061,10 +4185,10 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         for wrapped in wrapped_lines:
             ax_s.text(0.01, y, wrapped, fontsize=body_fs, va="top", ha="left", linespacing=1.22, clip_on=True)
             y -= (_line_count(wrapped) * line_step) + para_gap
-        _add_page_footer(fig_summary, 2)
+        _add_page_footer(fig_summary, 3)
         pdf.savefig(fig_summary)
         plt.close(fig_summary)
-        # Page 3: Top5 table + 1차 구분 charts (landscape)
+        # Page 4: Top5 table + 1차 구분 charts (landscape)
         fig2 = plt.figure(figsize=a4_landscape)
         left2, right2, bottom2, top2 = _decorate_page(fig2, a4_landscape)
         gs2 = fig2.add_gridspec(
@@ -4084,7 +4208,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         ax2_table = fig2.add_subplot(gs2[1, :])
         ax2_table.set_facecolor("none")
         ax2_table.axis("off")
-        _draw_num_box(ax2_table, 0.015, 1.067, 3, "#1B73D1", box_w=0.03, box_h=0.045, fs=10.5)
+        _draw_num_box(ax2_table, 0.015, 1.067, 4, "#1B73D1", box_w=0.03, box_h=0.045, fs=10.5)
         ax2_table.text(0.045, 1.05, f"감시분야별 지적사항 Top5 및 주요 현황 ({period_label})", fontsize=13.5, weight="bold", va="bottom")
         headers = ["감시분야", "Top1", "Top2", "Top3", "Top4", "Top5"]
         rows = []
@@ -4207,10 +4331,10 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         _draw_mini_table([left2 + 0.03, bottom2 + 0.040, 0.23, 0.24], "지적사항 건수 Top 10 (회사)", ["제조업체명", "건수"], company_rows, [0.77, 0.23], fs=8.0, title_align="left")
         _draw_mini_table([left2 + 0.31, bottom2 + 0.040, 0.24, 0.24], "지적사항 건수 Top 10 (세부구분)", ["세부구분", "건수"], detail_rows, [0.74, 0.26], fs=8.3, title_align="left")
         _draw_mini_table([left2 + 0.57, bottom2 + 0.040, 0.36, 0.24], "우선관리 등급 별 업체 수", ["우선관리 등급", "업체 수", "해당 업체명"], grade_rows, [0.40, 0.15, 0.45], fs=7.8, title_align="left")
-        _add_page_footer(fig2, 3)
+        _add_page_footer(fig2, 4)
         pdf.savefig(fig2)
         plt.close(fig2)
-        # Page 4: existing graphs
+        # Page 5: existing graphs
         fig3 = plt.figure(figsize=a4_portrait)
         left3, right3, bottom3, top3 = _decorate_page(fig3, a4_portrait)
         gs3 = fig3.add_gridspec(
@@ -4230,7 +4354,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         ax3_sub = fig3.add_subplot(gs3[1, :])
         ax3_sub.set_facecolor("none")
         ax3_sub.axis("off")
-        _draw_num_box(ax3_sub, 0.015, 0.71, 4, "#F2C037", box_w=0.03, box_h=0.045, fs=10.5)
+        _draw_num_box(ax3_sub, 0.015, 0.71, 5, "#F2C037", box_w=0.03, box_h=0.045, fs=10.5)
         ax3_sub.text(0.045, 0.7, "감시분야 및 등급 분포 차트", fontsize=12.8, weight="bold")
         ax3_sub.text(0.045, 0.15, "감시분야와 등급 분포를 동일 기간 기준으로 시각화한 결과입니다.", fontsize=9.2)
         ax1 = fig3.add_subplot(gs3[2, 0])
@@ -4271,7 +4395,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
                 startangle=90,
             )
             ax4.set_title("등급별 비율", fontsize=12, pad=8)
-        _add_page_footer(fig3, 4)
+        _add_page_footer(fig3, 5)
         pdf.savefig(fig3)
         plt.close(fig3)
     buf.seek(0)
@@ -5591,7 +5715,7 @@ def main():
         render_manufacturer_dashboard(w_base, selected_period)
     with report_tab:
         st.markdown("### 📄 식약처 의약품 GMP 실태조사 Letter 다운로드")
-        st.caption("선택한 기간(분기/연간) 기준으로 4페이지 PDF Letter를 생성합니다. 1페이지는 핵심 요약 및 권장 실행방향, 2페이지는 상세 트렌드 요약, 3페이지는 Top5 표와 보조 요약정보, 4페이지는 감시분야/등급 그래프입니다.")
+        st.caption("선택한 기간(분기/연간) 기준으로 5페이지 PDF Letter를 생성합니다. 1페이지는 핵심 요약·Track 선정 근거·관리흐름 영향도, 2페이지는 Track별 우선 확인자료와 다음 기간 모니터링 포인트, 3페이지는 상세 트렌드 요약, 4페이지는 Top5 표와 보조 요약정보, 5페이지는 감시분야/등급 그래프입니다.")
         if period_opts and selected_period:
             pf = filter_by_period(w_base, selected_period).copy()
             if pf.empty:
