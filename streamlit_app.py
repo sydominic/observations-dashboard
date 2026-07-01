@@ -3754,6 +3754,78 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
                 continue
             mask = mask | ser.str.contains(str(kw), case=False, na=False, regex=False)
         return int(mask.sum())
+    def _topic_action_text(topic: str) -> str:
+        topic = str(topic or "").strip()
+        topic_specific = {
+            "세척 밸리데이션/세척관리": "CHT/DHT, 세척기록, 잔류관리 기준과 실제 기록의 정합성 확인",
+            "회수/변경/일탈 관리": "변경·일탈 후속조치, 종료기준, CAPA 연계와 효과확인 상태 점검",
+            "제품품질평가/PQR": "PQR 입력자료 누락, 개선 필요사항 도출, CAPA 전환 기준 확인",
+            "시험기록/기초자료 관리": "원자료 보존, 검토 흔적, 재계산·수정 이력의 추적성 확인",
+            "검체채취/검체관리": "검체채취 기준, 보관 포장, 라벨·위치 추적성 확인",
+            "제조기록서 관리": "제조기록서 지시사항, 실제 수행내용, 검토기록의 일치성 확인",
+            "시설관리": "가스·용수·공조 등 제조지원시설 기준과 점검기록 일치성 확인",
+            "장비 적격성평가": "적격성평가 범위, 실제 운전조건, 변경 후 재평가 기준 확인",
+            "보관조건/창고 관리": "보관조건, 구획, 입출고·온습도 기록과 이탈 대응 기준 확인",
+            "데이터 완전성 관리": "기록 생성·수정·백업·검토 단계의 추적성과 권한 통제 확인",
+        }
+        if topic in topic_specific:
+            return topic_specific[topic]
+        advice = TOPIC_ADVICE.get(topic, "")
+        if advice:
+            cleaned = advice
+            for suffix in ["하는 것이 좋습니다.", "하는 편이 좋습니다.", "점검하는 것이 좋습니다.", "확인하는 것이 좋습니다."]:
+                cleaned = cleaned.replace(suffix, "")
+            cleaned = cleaned.rstrip(". ")
+            if cleaned:
+                return cleaned
+        return f"{topic} 관련 기준서, 기록, 후속조치의 일치성 확인"
+
+    def _topic_track_title(topic: str) -> str:
+        topic = str(topic or "").strip()
+        title_map = {
+            "세척 밸리데이션/세척관리": "세척관리 재점검",
+            "회수/변경/일탈 관리": "변경·일탈 닫힘 구조",
+            "제품품질평가/PQR": "PQR 후속조치 연계",
+            "시험기록/기초자료 관리": "시험기록 원자료 보강",
+            "검체채취/검체관리": "검체관리 추적성 보강",
+            "시설관리": "시설관리 기준 정합성",
+            "장비 적격성평가": "장비 적격성 범위 확인",
+            "보관조건/창고 관리": "창고·보관조건 점검",
+            "데이터 완전성 관리": "데이터 완전성 통제",
+            "제조기록서 관리": "제조기록서 정합성",
+        }
+        return title_map.get(topic, f"{_short_topic_label(topic, 10)} 점검")
+
+    def _build_topic_counts(actual_df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
+        if actual_df is None or actual_df.empty:
+            return pd.DataFrame(), []
+        base = actual_df.copy()
+        try:
+            topics = base.apply(lambda r: infer_topic_from_row(r), axis=1)
+        except Exception:
+            if "세부구분" in base.columns:
+                topics = base["세부구분"]
+            else:
+                topics = pd.Series(["반복 지적 유형"] * len(base), index=base.index)
+        topics = topics.astype(str).str.strip()
+        topics = topics[(topics != "") & (topics.str.lower() != "nan")]
+        if topics.empty:
+            return pd.DataFrame(), []
+        topic_df = base.loc[topics.index].copy()
+        topic_df["_report_topic"] = topics
+        vc = topic_df["_report_topic"].value_counts()
+        topic_rows = []
+        for topic, cnt in vc.items():
+            sub = topic_df[topic_df["_report_topic"] == topic]
+            dominant_field = "-"
+            if "감시분야" in sub.columns:
+                field_ser = sub["감시분야"].astype(str).str.strip()
+                field_ser = field_ser[(field_ser != "") & (field_ser.str.lower() != "nan")]
+                if not field_ser.empty:
+                    dominant_field = str(field_ser.value_counts().index[0])
+            topic_rows.append({"topic": str(topic), "cnt": int(cnt), "field": dominant_field})
+        return topic_df, topic_rows
+
     def _build_report_metrics():
         total_count = int(len(actual)) if actual is not None else 0
         f_rank = field_df.copy() if isinstance(field_df, pd.DataFrame) else pd.DataFrame(columns=["감시분야", "건수"])
@@ -3769,23 +3841,57 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         first_field, first_cnt, first_share = _field_item(0)
         second_field, second_cnt, second_share = _field_item(1)
         third_field, third_cnt, third_share = _field_item(2)
-        top_detail = "-"
-        top_detail_cnt = 0
-        if actual is not None and not actual.empty and "세부구분" in actual.columns:
-            ser = actual["세부구분"].astype(str).str.strip()
-            ser = ser[(ser != "") & (ser.str.lower() != "nan")]
-            if not ser.empty:
-                vc = ser.value_counts()
-                top_detail = str(vc.index[0])
-                top_detail_cnt = int(vc.iloc[0])
-        wash_cnt = _count_detail_contains("세척") or top_detail_cnt
-        dev_cnt = _count_detail_contains("회수/변경/일탈", "변경", "일탈")
-        pqr_cnt = _count_detail_contains("PQR", "제품품질평가")
-        test_record_cnt = _count_detail_contains("시험기록", "기초자료")
-        specimen_cnt = _count_detail_contains("검체")
+        topic_df, topic_rows = _build_topic_counts(actual)
+        if topic_rows:
+            top_detail = topic_rows[0]["topic"]
+            top_detail_cnt = int(topic_rows[0]["cnt"])
+        else:
+            top_detail = "-"
+            top_detail_cnt = 0
         top_fields_for_msg = [x for x in [first_field, second_field, third_field] if x and x != "-"]
         focus_fields = ", ".join(top_fields_for_msg) if top_fields_for_msg else "주요 감시분야"
-        main_topic = top_detail if top_detail and top_detail != "-" else "반복 지적 유형"
+        top_topic_phrase = ", ".join([f"{r['topic']} {int(r['cnt'])}건" for r in topic_rows[:3]]) if topic_rows else "반복 지적 유형"
+        tracks = []
+        colors = ["#1F77B4", "#F28C28", "#2F974F"]
+        for idx, r in enumerate(topic_rows[:3]):
+            topic = r["topic"]
+            cnt = int(r["cnt"])
+            field = r.get("field", "-")
+            basis = f"근거: {topic} {cnt}건 반복" + (f" / 주요 분야: {field}" if field and field != "-" else "")
+            tracks.append({
+                "label": f"Track {idx + 1}",
+                "color": colors[idx],
+                "title": _topic_track_title(topic),
+                "basis": basis,
+                "point": "점검: " + _topic_action_text(topic),
+                "topic": topic,
+                "cnt": cnt,
+            })
+        fallback_fields = [f for f in [first_field, second_field, third_field] if f and f != "-"]
+        while len(tracks) < 3:
+            idx = len(tracks)
+            fallback_field = fallback_fields[idx] if idx < len(fallback_fields) else "공통 관리흐름"
+            tracks.append({
+                "label": f"Track {idx + 1}",
+                "color": colors[idx],
+                "title": f"{fallback_field} 점검",
+                "basis": f"근거: {fallback_field} 분야 반복 지적 확인",
+                "point": "점검: 기준서, 수행기록, 후속조치의 일치성 확인",
+                "topic": fallback_field,
+                "cnt": 0,
+            })
+        track_topics_short = ", ".join([_short_topic_label(t["topic"], 8) for t in tracks if t.get("topic") and t.get("topic") != "-"][:3]) or "상위 반복유형"
+        first_topic = tracks[0]["topic"] if tracks else "상위 반복유형"
+        steps = [
+            (1, f"{_short_topic_label(first_topic, 8)} 기준 확인", f"{first_topic} 관련 SOP, 기준서, 검토 기준과 실제 기록 요구사항 확인"),
+            (2, "상위유형 기록 샘플링", f"{track_topics_short} 관련 원자료·점검기록·후속조치 기록 샘플링"),
+            (3, "부서별 갭 정리", f"{focus_fields} 담당부서가 기준-실행-기록 불일치와 누락 항목 자체 정리"),
+            (4, "각 부서 조치계획", "각 부서가 자체 개선계획과 완료기준을 수립하고, QA는 기준·기록·CAPA 연계 검토 지원"),
+        ]
+        message = (
+            f"이번 기간 지적은 {focus_fields}에 집중되어 있으며, 종합 세부유형 기준으로 {top_topic_phrase}이 확인되었습니다. "
+            "따라서 단일 항목의 보완보다 각 부서가 기준서, 실제 수행기록, 후속조치까지 이어지는 관리 흐름을 자체 점검하고 필요한 보완계획을 수립하는 방식이 필요합니다."
+        )
         metrics = {
             "total_count": total_count,
             "first_field": first_field,
@@ -3800,13 +3906,12 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
             "top_detail": top_detail,
             "top_detail_short": _short_topic_label(top_detail, 8),
             "top_detail_cnt": top_detail_cnt,
-            "wash_cnt": wash_cnt,
-            "dev_cnt": dev_cnt,
-            "pqr_cnt": pqr_cnt,
-            "test_record_cnt": test_record_cnt,
-            "specimen_cnt": specimen_cnt,
             "focus_fields": focus_fields,
-            "main_topic": main_topic,
+            "top_topic_phrase": top_topic_phrase,
+            "message": message,
+            "tracks": tracks,
+            "steps": steps,
+            "topic_df": topic_df,
         }
         return metrics
     def _draw_round_rect(ax, xy, w, h, facecolor="white", edgecolor="#CFD8E3", lw=0.8, radius=0.018, zorder=2, alpha=1.0):
@@ -3881,42 +3986,33 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         _draw_kpi_card(ax, 0.000, card_y, card_w, card_h, "#1F77B4", "총 지적", f"{report_metrics['total_count']:,}건", f"{period_label} Letter 대상 지적사항 합계")
         _draw_kpi_card(ax, card_w + card_gap, card_y, card_w, card_h, "#F28C28", "최다 분야", report_metrics["first_field"], f"{report_metrics['first_cnt']}건 / {report_metrics['first_share']:.1f}%")
         _draw_kpi_card(ax, (card_w + card_gap) * 2, card_y, card_w, card_h, "#2F974F", "2순위 분야", report_metrics["second_field"], f"{report_metrics['second_cnt']}건 / {report_metrics['second_share']:.1f}%")
-        _draw_kpi_card(ax, (card_w + card_gap) * 3, card_y, card_w, card_h, "#D94A45", "최다 세부유형", report_metrics["top_detail_short"], f"{report_metrics['top_detail_cnt']}건")
+        _draw_kpi_card(ax, (card_w + card_gap) * 3, card_y, card_w, card_h, "#D94A45", "최다 세부유형(종합)", report_metrics["top_detail_short"], f"전체 기준 {report_metrics['top_detail_cnt']}건")
         _draw_round_rect(ax, (0.000, 0.535), 1.000, 0.115, facecolor="#EAF3FB", edgecolor="#BCD8F0", lw=0.9, radius=0.014, zorder=3)
-        ax.text(0.020, 0.622, "이번 분기 핵심 메시지", transform=ax.transAxes, fontsize=12.6, weight="bold", color="#123F73", va="top", zorder=5)
-        message = (
-            f"이번 기간 지적은 {report_metrics['focus_fields']}에 집중되어 있으며, "
-            f"{report_metrics['main_topic']}와 변경/일탈/PQR, 시험기록 관리가 반복적으로 확인되었습니다. "
-            "단일 항목의 보완보다 기준서, 기록, 후속조치가 서로 맞물리는 관리 흐름 단위의 정비가 필요합니다."
-        )
+        ax.text(0.020, 0.622, "선택 기간 핵심 메시지", transform=ax.transAxes, fontsize=12.6, weight="bold", color="#123F73", va="top", zorder=5)
+        message = report_metrics.get("message", "선택한 기간의 주요 반복 지적과 담당부서별 후속조치 방향을 확인해야 합니다.")
         ax.text(0.020, 0.586, _wrap_text_to_axes(fig, ax, message, fontsize=8.7, x0=0.020, x1=0.980),
                 transform=ax.transAxes, fontsize=8.7, color="#111827", va="top", linespacing=1.18, zorder=5)
         track_y, track_h, track_gap = 0.318, 0.180, 0.036
         track_w = (1.0 - track_gap * 2) / 3
-        _draw_track_card(
-            ax, fig, 0.000, track_y, track_w, track_h, "#1F77B4", "Track 1", "세척관리 재점검",
-            f"근거: 세척관리 {report_metrics['wash_cnt']}건 최다 반복",
-            "점검: CHT/DHT·세척기록·잔류관리 정합성 확인",
-        )
-        _draw_track_card(
-            ax, fig, track_w + track_gap, track_y, track_w, track_h, "#F28C28", "Track 2", "변경·일탈·PQR 닫힘 구조",
-            f"근거: 변경/일탈 {report_metrics['dev_cnt']}건, PQR {report_metrics['pqr_cnt']}건 반복",
-            "점검: 후속조치·종료기준·CAPA 연계 확인",
-        )
-        _draw_track_card(
-            ax, fig, (track_w + track_gap) * 2, track_y, track_w, track_h, "#2F974F", "Track 3", "시험기록·검체관리 보강",
-            f"근거: 시험기록 {report_metrics['test_record_cnt']}건, 검체관리 반복",
-            "점검: 원자료·검토흔적·검체보관 추적성 확인",
-        )
+        track_items = report_metrics.get("tracks", [])[:3]
+        for idx, track in enumerate(track_items):
+            _draw_track_card(
+                ax, fig, idx * (track_w + track_gap), track_y, track_w, track_h,
+                track.get("color", ["#1F77B4", "#F28C28", "#2F974F"][idx]),
+                track.get("label", f"Track {idx + 1}"),
+                track.get("title", "반복유형 점검"),
+                track.get("basis", "근거: 선택 기간 반복 지적 확인"),
+                track.get("point", "점검: 기준서, 기록, 후속조치의 일치성 확인"),
+            )
         ax.text(0.000, 0.218, "권장 실행 순서", transform=ax.transAxes, fontsize=12.2, weight="bold", color="#111827", va="top")
         step_y, step_h, step_gap = 0.030, 0.125, 0.055
         step_w = (1.0 - step_gap * 3) / 4
-        steps = [
+        steps = report_metrics.get("steps", [
             (1, "기준서·SOP 확인", "반복 지적과 관련된 기준서, 절차서, 검토 기준을 먼저 확인"),
-            (2, "기록 샘플링", "CHT/DHT, 일탈·변경, PQR, 시험기록 원자료를 샘플링 검토"),
-            (3, "갭 정리", "기준과 실제 기록 사이 불일치, 누락, 후속조치 미흡 항목 정리"),
+            (2, "기록 샘플링", "상위 반복유형의 원자료와 후속조치 기록을 샘플링 검토"),
+            (3, "부서별 갭 정리", "담당부서가 기준-실행-기록 불일치와 누락 항목 자체 정리"),
             (4, "각 부서 조치계획", "각 부서가 자체 개선계획과 완료기준을 수립하고, QA는 기준·기록·CAPA 연계 검토 지원"),
-        ]
+        ])
         for idx, (num, title, desc) in enumerate(steps):
             x = idx * (step_w + step_gap)
             _draw_step_card(ax, fig, x, step_y, step_w, step_h, num, title, desc)
@@ -5521,8 +5617,8 @@ def main():
                     key=f"onepage_scope_{selected_period}",
                 )
                 onepage_topn = 10 if onepage_scope == "Top10" else None
-                compact_pdf_bytes = cached_compact_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, f"onepage_{scope_suffix}"), topn_per_field=onepage_topn)
                 scope_suffix = "top10" if onepage_scope == "Top10" else "all"
+                compact_pdf_bytes = cached_compact_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, f"onepage_{scope_suffix}"), topn_per_field=onepage_topn)
                 st.download_button(
                     label=f"📋 One page Checklist 다운로드 - {onepage_scope} ({selected_period})",
                     data=compact_pdf_bytes,
