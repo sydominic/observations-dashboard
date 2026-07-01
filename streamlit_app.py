@@ -3727,6 +3727,18 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         return "\n".join(lines)
     def _line_count(s: str) -> int:
         return max(1, str(s).count("\n") + 1)
+    def _truncate_wrapped_text(text_value: str, max_lines: int) -> str:
+        lines = str(text_value or "").split("\n")
+        if len(lines) <= max_lines:
+            return str(text_value or "")
+        kept = lines[:max_lines]
+        last = kept[-1].rstrip()
+        if last:
+            last = last[:-1].rstrip() if len(last) > 1 else last
+            kept[-1] = last + "…"
+        else:
+            kept[-1] = "…"
+        return "\n".join(kept)
     def _short_topic_label(value: str, max_len: int = 9) -> str:
         label = re.sub(r"\s+", " ", str(value or "").strip())
         if not label or label.lower() == "nan":
@@ -3886,7 +3898,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
             (1, f"{_short_topic_label(first_topic, 8)} 기준 확인", f"{first_topic} 관련 SOP, 기준서, 검토 기준과 실제 기록 요구사항 확인"),
             (2, "상위유형 기록 샘플링", f"{track_topics_short} 관련 원자료·점검기록·후속조치 기록 샘플링"),
             (3, "부서별 갭 정리", f"{focus_fields} 담당부서가 기준-실행-기록 불일치와 누락 항목 자체 정리"),
-            (4, "각 부서 조치계획", "각 부서가 자체 개선계획과 완료기준을 수립하고, QA는 기준·기록·CAPA 연계 검토 지원"),
+            (4, "각 부서 조치계획", "각 부서가 자체 개선계획·완료기준을 수립하고, QA는 기준·기록·CAPA 검토 지원"),
         ]
         message = (
             f"이번 기간 지적은 {focus_fields}에 집중되어 있으며, 종합 세부유형 기준으로 {top_topic_phrase}이 확인되었습니다. "
@@ -3954,9 +3966,14 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         circle = mpatches.Circle((x + 0.027, y + h - 0.035), 0.017, transform=ax.transAxes, facecolor="#123F73", edgecolor="#123F73", zorder=4)
         ax.add_patch(circle)
         ax.text(x + 0.027, y + h - 0.035, str(num), transform=ax.transAxes, fontsize=8.7, weight="bold", color="white", ha="center", va="center", zorder=5)
-        ax.text(x + 0.052, y + h - 0.026, title, transform=ax.transAxes, fontsize=9.3, weight="bold", color="#111827", va="top", zorder=5)
-        wrapped = _wrap_text_to_axes(fig, ax, desc, fontsize=7.3, x0=x + 0.018, x1=x + w - 0.018)
-        ax.text(x + 0.018, y + 0.030, wrapped, transform=ax.transAxes, fontsize=7.3, color="#111827", va="bottom", linespacing=1.14, zorder=5)
+        wrapped_title = _wrap_text_to_axes(fig, ax, title, fontsize=8.9, x0=x + 0.052, x1=x + w - 0.014)
+        wrapped_title = _truncate_wrapped_text(wrapped_title, 2)
+        title_lines = _line_count(wrapped_title)
+        ax.text(x + 0.052, y + h - 0.024, wrapped_title, transform=ax.transAxes, fontsize=8.9, weight="bold", color="#111827", va="top", linespacing=1.05, zorder=5)
+        wrapped_desc = _wrap_text_to_axes(fig, ax, desc, fontsize=6.8, x0=x + 0.018, x1=x + w - 0.018)
+        max_desc_lines = 3 if title_lines == 1 else 2
+        wrapped_desc = _truncate_wrapped_text(wrapped_desc, max_desc_lines)
+        ax.text(x + 0.018, y + 0.028, wrapped_desc, transform=ax.transAxes, fontsize=6.8, color="#111827", va="bottom", linespacing=1.12, zorder=5)
     category_col = next((c for c in ["1차 구분", "1차구분", "1차 분류"] if c in filtered.columns), None)
     category_df = pd.DataFrame(columns=["세부 구분", "건수"])
     if category_col is not None:
@@ -4011,7 +4028,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
             (1, "기준서·SOP 확인", "반복 지적과 관련된 기준서, 절차서, 검토 기준을 먼저 확인"),
             (2, "기록 샘플링", "상위 반복유형의 원자료와 후속조치 기록을 샘플링 검토"),
             (3, "부서별 갭 정리", "담당부서가 기준-실행-기록 불일치와 누락 항목 자체 정리"),
-            (4, "각 부서 조치계획", "각 부서가 자체 개선계획과 완료기준을 수립하고, QA는 기준·기록·CAPA 연계 검토 지원"),
+            (4, "각 부서 조치계획", "각 부서가 자체 개선계획·완료기준을 수립하고, QA는 기준·기록·CAPA 검토 지원"),
         ])
         for idx, (num, title, desc) in enumerate(steps):
             x = idx * (step_w + step_gap)
