@@ -104,6 +104,7 @@ if __name__ == "__main__" and os.environ.get("GMP_ENABLE_LOCAL_LAUNCHER") == "1"
     _pause()
     raise SystemExit(0)
 import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import pandas as pd
 import plotly.express as px
 import streamlit as st
@@ -3701,6 +3702,131 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         return "\n".join(lines)
     def _line_count(s: str) -> int:
         return max(1, str(s).count("\n") + 1)
+    def _short_topic_label(value: str, max_len: int = 9) -> str:
+        label = re.sub(r"\s+", " ", str(value or "").strip())
+        if not label or label.lower() == "nan":
+            return "-"
+        replacements = [
+            ("세척 밸리데이션/세척관리", "세척관리"),
+            ("시험기록/기초자료 관리", "시험기록"),
+            ("회수/변경/일탈 관리", "변경·일탈"),
+            ("제품품질평가/PQR", "PQR"),
+            ("보관조건/창고 관리", "창고관리"),
+            ("장비 적격성평가", "장비적격성"),
+        ]
+        for src, dst in replacements:
+            if src in label:
+                return dst
+        label = label.replace(" 밸리데이션", "").replace("/", "·").replace(" 관리", "")
+        return label if len(label) <= max_len else label[:max_len].rstrip() + "…"
+    def _count_detail_contains(*keywords: str) -> int:
+        if actual is None or actual.empty or "세부구분" not in actual.columns:
+            return 0
+        ser = actual["세부구분"].astype(str).fillna("")
+        mask = pd.Series(False, index=ser.index)
+        for kw in keywords:
+            if not kw:
+                continue
+            mask = mask | ser.str.contains(str(kw), case=False, na=False, regex=False)
+        return int(mask.sum())
+    def _build_report_metrics():
+        total_count = int(len(actual)) if actual is not None else 0
+        f_rank = field_df.copy() if isinstance(field_df, pd.DataFrame) else pd.DataFrame(columns=["감시분야", "건수"])
+        if not f_rank.empty and "건수" in f_rank.columns:
+            f_rank = f_rank.sort_values("건수", ascending=False).reset_index(drop=True)
+        def _field_item(idx: int):
+            if f_rank.empty or idx >= len(f_rank):
+                return "-", 0, 0.0
+            name = str(f_rank.loc[idx, "감시분야"])
+            cnt = int(f_rank.loc[idx, "건수"])
+            share = (cnt / total_count * 100.0) if total_count else 0.0
+            return name, cnt, share
+        first_field, first_cnt, first_share = _field_item(0)
+        second_field, second_cnt, second_share = _field_item(1)
+        third_field, third_cnt, third_share = _field_item(2)
+        top_detail = "-"
+        top_detail_cnt = 0
+        if actual is not None and not actual.empty and "세부구분" in actual.columns:
+            ser = actual["세부구분"].astype(str).str.strip()
+            ser = ser[(ser != "") & (ser.str.lower() != "nan")]
+            if not ser.empty:
+                vc = ser.value_counts()
+                top_detail = str(vc.index[0])
+                top_detail_cnt = int(vc.iloc[0])
+        wash_cnt = _count_detail_contains("세척") or top_detail_cnt
+        dev_cnt = _count_detail_contains("회수/변경/일탈", "변경", "일탈")
+        pqr_cnt = _count_detail_contains("PQR", "제품품질평가")
+        test_record_cnt = _count_detail_contains("시험기록", "기초자료")
+        specimen_cnt = _count_detail_contains("검체")
+        top_fields_for_msg = [x for x in [first_field, second_field, third_field] if x and x != "-"]
+        focus_fields = ", ".join(top_fields_for_msg) if top_fields_for_msg else "주요 감시분야"
+        main_topic = top_detail if top_detail and top_detail != "-" else "반복 지적 유형"
+        metrics = {
+            "total_count": total_count,
+            "first_field": first_field,
+            "first_cnt": first_cnt,
+            "first_share": first_share,
+            "second_field": second_field,
+            "second_cnt": second_cnt,
+            "second_share": second_share,
+            "third_field": third_field,
+            "third_cnt": third_cnt,
+            "third_share": third_share,
+            "top_detail": top_detail,
+            "top_detail_short": _short_topic_label(top_detail, 8),
+            "top_detail_cnt": top_detail_cnt,
+            "wash_cnt": wash_cnt,
+            "dev_cnt": dev_cnt,
+            "pqr_cnt": pqr_cnt,
+            "test_record_cnt": test_record_cnt,
+            "specimen_cnt": specimen_cnt,
+            "focus_fields": focus_fields,
+            "main_topic": main_topic,
+        }
+        return metrics
+    def _draw_round_rect(ax, xy, w, h, facecolor="white", edgecolor="#CFD8E3", lw=0.8, radius=0.018, zorder=2, alpha=1.0):
+        patch = mpatches.FancyBboxPatch(
+            xy, w, h,
+            boxstyle=f"round,pad=0.006,rounding_size={radius}",
+            transform=ax.transAxes,
+            facecolor=facecolor,
+            edgecolor=edgecolor,
+            linewidth=lw,
+            zorder=zorder,
+            alpha=alpha,
+        )
+        ax.add_patch(patch)
+        return patch
+    def _draw_kpi_card(ax, x, y, w, h, color, label, value, sub):
+        _draw_round_rect(ax, (x, y), w, h, facecolor="white", edgecolor="#CFD8E3", lw=0.9, radius=0.015, zorder=3)
+        ax.add_patch(mpatches.FancyBboxPatch(
+            (x, y + h - 0.012), w, 0.012,
+            boxstyle="round,pad=0.000,rounding_size=0.014",
+            transform=ax.transAxes,
+            facecolor=color, edgecolor=color, linewidth=0.0, zorder=4,
+        ))
+        ax.text(x + 0.014, y + h - 0.036, label, transform=ax.transAxes, fontsize=8.6, weight="bold", color="#6B7280", va="top", zorder=5)
+        ax.text(x + 0.014, y + h - 0.075, value, transform=ax.transAxes, fontsize=20.0, weight="bold", color="#123F73", va="top", zorder=5)
+        ax.text(x + 0.014, y + 0.022, sub, transform=ax.transAxes, fontsize=7.6, color="#6B7280", va="bottom", zorder=5)
+    def _draw_pill(ax, x, y, w, h, color, label):
+        _draw_round_rect(ax, (x, y), w, h, facecolor=color, edgecolor=color, lw=0.0, radius=0.008, zorder=5)
+        ax.text(x + w / 2, y + h / 2, label, transform=ax.transAxes, fontsize=8.4, weight="bold", color="white", ha="center", va="center", zorder=6)
+    def _draw_track_card(ax, fig, x, y, w, h, color, track_label, title, basis, point):
+        _draw_round_rect(ax, (x, y), w, h, facecolor="white", edgecolor="#CFD8E3", lw=0.9, radius=0.015, zorder=3)
+        _draw_pill(ax, x + 0.018, y + h - 0.046, 0.085, 0.033, color, track_label)
+        ax.text(x + 0.018, y + h - 0.068, title, transform=ax.transAxes, fontsize=10.8, weight="bold", color="#111827", va="top", zorder=5)
+        wrapped_basis = _wrap_text_to_axes(fig, ax, basis, fontsize=7.2, x0=x + 0.018, x1=x + w - 0.018)
+        wrapped_point = _wrap_text_to_axes(fig, ax, point, fontsize=7.2, x0=x + 0.018, x1=x + w - 0.018)
+        ax.text(x + 0.018, y + h - 0.092, wrapped_basis, transform=ax.transAxes, fontsize=7.2, color="#111827", va="top", linespacing=1.12, zorder=5)
+        ax.text(x + 0.018, y + 0.036, wrapped_point, transform=ax.transAxes, fontsize=7.2, color="#111827", va="bottom", linespacing=1.12, zorder=5)
+    def _draw_step_card(ax, fig, x, y, w, h, num, title, desc):
+        _draw_round_rect(ax, (x, y), w, h, facecolor="#F5F7FB", edgecolor="#CFD8E3", lw=0.9, radius=0.012, zorder=3)
+        circle = mpatches.Circle((x + 0.027, y + h - 0.035), 0.017, transform=ax.transAxes, facecolor="#123F73", edgecolor="#123F73", zorder=4)
+        ax.add_patch(circle)
+        ax.text(x + 0.027, y + h - 0.035, str(num), transform=ax.transAxes, fontsize=8.7, weight="bold", color="white", ha="center", va="center", zorder=5)
+        ax.text(x + 0.052, y + h - 0.026, title, transform=ax.transAxes, fontsize=9.3, weight="bold", color="#111827", va="top", zorder=5)
+        wrapped = _wrap_text_to_axes(fig, ax, desc, fontsize=7.3, x0=x + 0.018, x1=x + w - 0.018)
+        ax.text(x + 0.018, y + 0.030, wrapped, transform=ax.transAxes, fontsize=7.3, color="#111827", va="bottom", linespacing=1.14, zorder=5)
     category_col = next((c for c in ["1차 구분", "1차구분", "1차 분류"] if c in filtered.columns), None)
     category_df = pd.DataFrame(columns=["세부 구분", "건수"])
     if category_col is not None:
@@ -3711,32 +3837,96 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
             category_df = pd.DataFrame({"1차 구분": vc.index.tolist(), "건수": vc.values.tolist()})
     buf = io.BytesIO()
     with PdfPages(buf) as pdf:
-        # Page 1: summary only
+        # Page 1: KPI + QA action summary
+        report_metrics = _build_report_metrics()
         fig = plt.figure(figsize=a4_landscape)
         left, right, bottom, top = _decorate_page(fig, a4_landscape)
         content_left = left + _cm_to_fig_frac(0.18, a4_landscape, "x")
-        content_right = right - _cm_to_fig_frac(0.95, a4_landscape, "x")
-        content_bottom = bottom + _cm_to_fig_frac(0.18, a4_landscape, "y")
+        content_right = right - _cm_to_fig_frac(0.18, a4_landscape, "x")
+        content_bottom = bottom + _cm_to_fig_frac(0.12, a4_landscape, "y")
         content_top = top - _cm_to_fig_frac(0.12, a4_landscape, "y")
         ax = fig.add_axes([content_left, content_bottom, content_right - content_left, content_top - content_bottom], zorder=2)
         ax.set_facecolor("none")
         ax.axis("off")
         _draw_report_header(fig, a4_landscape, left, right, top, period_kor, period_label, created_at, title_fs=18.0)
+        _draw_num_box(ax, 0.015, 0.922, 1, "#0EA5A4", box_w=0.03, box_h=0.045, fs=10.5)
+        ax.text(0.045, 0.938, "핵심 요약 및 권장 실행방향", transform=ax.transAxes, fontsize=14.5, weight="bold", va="top", color="#1F2937")
+        card_y, card_h, card_gap = 0.695, 0.160, 0.020
+        card_w = (1.0 - card_gap * 3) / 4
+        _draw_kpi_card(ax, 0.000, card_y, card_w, card_h, "#1F77B4", "총 지적", f"{report_metrics['total_count']:,}건", f"{period_label} Letter 대상 지적사항 합계")
+        _draw_kpi_card(ax, card_w + card_gap, card_y, card_w, card_h, "#F28C28", "최다 분야", report_metrics["first_field"], f"{report_metrics['first_cnt']}건 / {report_metrics['first_share']:.1f}%")
+        _draw_kpi_card(ax, (card_w + card_gap) * 2, card_y, card_w, card_h, "#2F974F", "2순위 분야", report_metrics["second_field"], f"{report_metrics['second_cnt']}건 / {report_metrics['second_share']:.1f}%")
+        _draw_kpi_card(ax, (card_w + card_gap) * 3, card_y, card_w, card_h, "#D94A45", "최다 세부유형", report_metrics["top_detail_short"], f"{report_metrics['top_detail_cnt']}건")
+        _draw_round_rect(ax, (0.000, 0.535), 1.000, 0.115, facecolor="#EAF3FB", edgecolor="#BCD8F0", lw=0.9, radius=0.014, zorder=3)
+        ax.text(0.020, 0.622, "이번 분기 핵심 메시지", transform=ax.transAxes, fontsize=12.6, weight="bold", color="#123F73", va="top", zorder=5)
+        message = (
+            f"이번 기간 지적은 {report_metrics['focus_fields']}에 집중되어 있으며, "
+            f"{report_metrics['main_topic']}와 변경/일탈/PQR, 시험기록 관리가 반복적으로 확인되었습니다. "
+            "단일 항목의 보완보다 기준서, 기록, 후속조치가 서로 맞물리는 관리 흐름 단위의 정비가 필요합니다."
+        )
+        ax.text(0.020, 0.586, _wrap_text_to_axes(fig, ax, message, fontsize=8.7, x0=0.020, x1=0.980),
+                transform=ax.transAxes, fontsize=8.7, color="#111827", va="top", linespacing=1.18, zorder=5)
+        track_y, track_h, track_gap = 0.318, 0.180, 0.036
+        track_w = (1.0 - track_gap * 2) / 3
+        _draw_track_card(
+            ax, fig, 0.000, track_y, track_w, track_h, "#1F77B4", "Track 1", "세척관리 재점검",
+            f"근거: 세척관리 {report_metrics['wash_cnt']}건 최다 반복",
+            "점검: CHT/DHT·세척기록·잔류관리 정합성 확인",
+        )
+        _draw_track_card(
+            ax, fig, track_w + track_gap, track_y, track_w, track_h, "#F28C28", "Track 2", "변경·일탈·PQR 닫힘 구조",
+            f"근거: 변경/일탈 {report_metrics['dev_cnt']}건, PQR {report_metrics['pqr_cnt']}건 반복",
+            "점검: 후속조치·종료기준·CAPA 연계 확인",
+        )
+        _draw_track_card(
+            ax, fig, (track_w + track_gap) * 2, track_y, track_w, track_h, "#2F974F", "Track 3", "시험기록·검체관리 보강",
+            f"근거: 시험기록 {report_metrics['test_record_cnt']}건, 검체관리 반복",
+            "점검: 원자료·검토흔적·검체보관 추적성 확인",
+        )
+        ax.text(0.000, 0.218, "권장 실행 순서", transform=ax.transAxes, fontsize=12.2, weight="bold", color="#111827", va="top")
+        step_y, step_h, step_gap = 0.030, 0.125, 0.055
+        step_w = (1.0 - step_gap * 3) / 4
+        steps = [
+            (1, "기준서·SOP 확인", "반복 지적과 관련된 기준서, 절차서, 검토 기준을 먼저 확인"),
+            (2, "기록 샘플링", "CHT/DHT, 일탈·변경, PQR, 시험기록 원자료를 샘플링 검토"),
+            (3, "갭 정리", "기준과 실제 기록 사이 불일치, 누락, 후속조치 미흡 항목 정리"),
+            (4, "부서별 조치계획", "QA 주관으로 제조, QC, 설비 부서별 개선계획 및 완료기준 설정"),
+        ]
+        for idx, (num, title, desc) in enumerate(steps):
+            x = idx * (step_w + step_gap)
+            _draw_step_card(ax, fig, x, step_y, step_w, step_h, num, title, desc)
+            if idx < len(steps) - 1:
+                ax.text(x + step_w + step_gap / 2, step_y + step_h / 2, "→", transform=ax.transAxes,
+                        fontsize=15.0, weight="bold", color="#6B7280", ha="center", va="center")
+        _add_page_footer(fig, 1)
+        pdf.savefig(fig)
+        plt.close(fig)
+        # Page 2: detailed trend summary
+        fig_summary = plt.figure(figsize=a4_landscape)
+        left_s, right_s, bottom_s, top_s = _decorate_page(fig_summary, a4_landscape)
+        content_left_s = left_s + _cm_to_fig_frac(0.18, a4_landscape, "x")
+        content_right_s = right_s - _cm_to_fig_frac(0.95, a4_landscape, "x")
+        content_bottom_s = bottom_s + _cm_to_fig_frac(0.18, a4_landscape, "y")
+        content_top_s = top_s - _cm_to_fig_frac(0.12, a4_landscape, "y")
+        ax_s = fig_summary.add_axes([content_left_s, content_bottom_s, content_right_s - content_left_s, content_top_s - content_bottom_s], zorder=2)
+        ax_s.set_facecolor("none")
+        ax_s.axis("off")
+        _draw_report_header(fig_summary, a4_landscape, left_s, right_s, top_s, period_kor, period_label, created_at, title_fs=18.0)
         y = 0.905
-        _draw_num_box(ax, 0.015, y - 0.012, 1, "#1EB7B5", box_w=0.03, box_h=0.045, fs=10.5)
-        ax.text(0.045, y, "주요 지적사항 트렌드 요약", fontsize=14.5, weight="bold", va="top")
+        _draw_num_box(ax_s, 0.015, y - 0.012, 2, "#1EB7B5", box_w=0.03, box_h=0.045, fs=10.5)
+        ax_s.text(0.045, y, "주요 지적사항 트렌드 요약", fontsize=14.5, weight="bold", va="top")
         y -= 0.045
         body_fs = 9.0
         line_step = 0.030
         para_gap = 0.012
-        wrapped_lines = [_wrap_text_to_axes(fig, ax, f"{i}. {line}", fontsize=body_fs, x0=0.01, x1=0.925) for i, line in enumerate(summary_lines, start=1)]
+        wrapped_lines = [_wrap_text_to_axes(fig_summary, ax_s, f"{i}. {line}", fontsize=body_fs, x0=0.01, x1=0.925) for i, line in enumerate(summary_lines, start=1)]
         for wrapped in wrapped_lines:
-            ax.text(0.01, y, wrapped, fontsize=body_fs, va="top", ha="left", linespacing=1.22, clip_on=True)
+            ax_s.text(0.01, y, wrapped, fontsize=body_fs, va="top", ha="left", linespacing=1.22, clip_on=True)
             y -= (_line_count(wrapped) * line_step) + para_gap
-        _add_page_footer(fig, 1)
-        pdf.savefig(fig)
-        plt.close(fig)
-        # Page 2: Top5 table + 1차 구분 charts (landscape)
+        _add_page_footer(fig_summary, 2)
+        pdf.savefig(fig_summary)
+        plt.close(fig_summary)
+        # Page 3: Top5 table + 1차 구분 charts (landscape)
         fig2 = plt.figure(figsize=a4_landscape)
         left2, right2, bottom2, top2 = _decorate_page(fig2, a4_landscape)
         gs2 = fig2.add_gridspec(
@@ -3756,7 +3946,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         ax2_table = fig2.add_subplot(gs2[1, :])
         ax2_table.set_facecolor("none")
         ax2_table.axis("off")
-        _draw_num_box(ax2_table, 0.015, 1.067, 2, "#1B73D1", box_w=0.03, box_h=0.045, fs=10.5)
+        _draw_num_box(ax2_table, 0.015, 1.067, 3, "#1B73D1", box_w=0.03, box_h=0.045, fs=10.5)
         ax2_table.text(0.045, 1.05, f"감시분야별 지적사항 Top5 및 주요 현황 ({period_label})", fontsize=13.5, weight="bold", va="bottom")
         headers = ["감시분야", "Top1", "Top2", "Top3", "Top4", "Top5"]
         rows = []
@@ -3879,10 +4069,10 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         _draw_mini_table([left2 + 0.03, bottom2 + 0.040, 0.23, 0.24], "지적사항 건수 Top 10 (회사)", ["제조업체명", "건수"], company_rows, [0.77, 0.23], fs=8.0, title_align="left")
         _draw_mini_table([left2 + 0.31, bottom2 + 0.040, 0.24, 0.24], "지적사항 건수 Top 10 (세부구분)", ["세부구분", "건수"], detail_rows, [0.74, 0.26], fs=8.3, title_align="left")
         _draw_mini_table([left2 + 0.57, bottom2 + 0.040, 0.36, 0.24], "우선관리 등급 별 업체 수", ["우선관리 등급", "업체 수", "해당 업체명"], grade_rows, [0.40, 0.15, 0.45], fs=7.8, title_align="left")
-        _add_page_footer(fig2, 2)
+        _add_page_footer(fig2, 3)
         pdf.savefig(fig2)
         plt.close(fig2)
-        # Page 3: existing graphs
+        # Page 4: existing graphs
         fig3 = plt.figure(figsize=a4_portrait)
         left3, right3, bottom3, top3 = _decorate_page(fig3, a4_portrait)
         gs3 = fig3.add_gridspec(
@@ -3902,7 +4092,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         ax3_sub = fig3.add_subplot(gs3[1, :])
         ax3_sub.set_facecolor("none")
         ax3_sub.axis("off")
-        _draw_num_box(ax3_sub, 0.015, 0.71, 3, "#F2C037", box_w=0.03, box_h=0.045, fs=10.5)
+        _draw_num_box(ax3_sub, 0.015, 0.71, 4, "#F2C037", box_w=0.03, box_h=0.045, fs=10.5)
         ax3_sub.text(0.045, 0.7, "감시분야 및 등급 분포 차트", fontsize=12.8, weight="bold")
         ax3_sub.text(0.045, 0.15, "감시분야와 등급 분포를 동일 기간 기준으로 시각화한 결과입니다.", fontsize=9.2)
         ax1 = fig3.add_subplot(gs3[2, 0])
@@ -3943,7 +4133,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
                 startangle=90,
             )
             ax4.set_title("등급별 비율", fontsize=12, pad=8)
-        _add_page_footer(fig3, 3)
+        _add_page_footer(fig3, 4)
         pdf.savefig(fig3)
         plt.close(fig3)
     buf.seek(0)
@@ -5257,7 +5447,7 @@ def main():
         render_manufacturer_dashboard(w_base, selected_period)
     with report_tab:
         st.markdown("### 📄 식약처 의약품 GMP 실태조사 Letter 다운로드")
-        st.caption("선택한 기간(분기/연간) 기준으로 3페이지 PDF Letter를 생성합니다. 1페이지는 분석 요약문, 2페이지는 Top5 표와 보조 요약정보, 3페이지는 감시분야/등급 그래프입니다.")
+        st.caption("선택한 기간(분기/연간) 기준으로 4페이지 PDF Letter를 생성합니다. 1페이지는 핵심 요약 및 권장 실행방향, 2페이지는 상세 트렌드 요약, 3페이지는 Top5 표와 보조 요약정보, 4페이지는 감시분야/등급 그래프입니다.")
         if period_opts and selected_period:
             pf = filter_by_period(w_base, selected_period).copy()
             if pf.empty:
