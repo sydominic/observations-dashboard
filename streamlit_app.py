@@ -3389,9 +3389,102 @@ def _pdf_cache_token(df: pd.DataFrame, period_label: str, purpose: str = "pdf") 
 def cached_report_pdf(df: pd.DataFrame, period_label: str, cache_token: str):
     return build_report_pdf(df.copy(), period_label)
 
+def _pdf_safe_text(value) -> str:
+    """Make user/data text safe for Matplotlib PDF text rendering."""
+    try:
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    s = str(value)
+    s = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", s)
+    # Matplotlib may treat dollar/backslash as mathtext delimiters and fail on raw GMP text.
+    s = s.replace("$", "＄").replace("\\", "＼")
+    return s.strip()
+
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        if pd.isna(value):
+            return int(default)
+    except Exception:
+        pass
+    try:
+        return int(float(str(value).replace(",", "").strip()))
+    except Exception:
+        return int(default)
+
+def _build_checklist_pdf_fallback(filtered: pd.DataFrame, period_label: str, topn_per_field: int = 10, error_message: str = "") -> bytes:
+    """Fallback renderer for internal checklist when the rich vertical layout fails."""
+    if FONT_NAME:
+        rcParams["font.family"] = FONT_NAME
+        rcParams["axes.unicode_minus"] = False
+    checklist_df = build_repetitive_checklist_items(filtered, period_label, topn_per_field=topn_per_field)
+    period_kor = format_period_label_korean(period_label)
+    created_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    a4_portrait = (8.27, 11.69)
+    buf = io.BytesIO()
+    with PdfPages(buf) as pdf:
+        page_no = 1
+        if checklist_df.empty:
+            fig = plt.figure(figsize=a4_portrait)
+            ax = fig.add_axes([0.08, 0.08, 0.84, 0.82])
+            ax.axis("off")
+            fig.text(0.08, 0.94, f"{period_kor} 자체 감시용 체크리스트", fontsize=15, weight="bold", ha="left", va="top")
+            fig.text(0.92, 0.94, f"대상 기간: {period_label}\n생성일시: {created_at}", fontsize=8.5, color="#6E6E6E", ha="right", va="top")
+            ax.text(0, 0.95, "해당 기간에는 체크리스트로 정리할 반복 지적사항이 부족합니다.", fontsize=10.5, va="top")
+            fig.text(0.92, 0.02, f"MFDS Internal Checklist  |  Page {page_no}", fontsize=8, color="#6E6E6E", ha="right")
+            pdf.savefig(fig); plt.close(fig)
+        else:
+            for field_name, field_rows in checklist_df.groupby("감시분야", sort=True):
+                rows = field_rows.sort_values("분야순번").to_dict(orient="records")
+                for start in range(0, len(rows), 4):
+                    page_rows = rows[start:start+4]
+                    fig = plt.figure(figsize=a4_portrait)
+                    ax = fig.add_axes([0.08, 0.08, 0.84, 0.82])
+                    ax.axis("off")
+                    fig.text(0.08, 0.94, f"{period_kor} 자체 감시용 체크리스트", fontsize=15, weight="bold", ha="left", va="top")
+                    fig.text(0.92, 0.94, f"대상 기간: {period_label}\n생성일시: {created_at}", fontsize=8.5, color="#6E6E6E", ha="right", va="top")
+                    ax.text(0.0, 0.97, f"감시분야: {_pdf_safe_text(field_name)}", fontsize=11.5, weight="bold", color="#184A8B", va="top")
+                    y = 0.90
+                    for row in page_rows:
+                        box_h = 0.195
+                        ax.add_patch(plt.Rectangle((0.0, y-box_h), 1.0, box_h, facecolor="white", edgecolor="#9FAAB5", linewidth=0.8))
+                        title = f"{_safe_int(row.get('분야순번'), 0):02d}. {_pdf_safe_text(row.get('중점관리영역', ''))}"
+                        meta = f"반복 {_safe_int(row.get('반복건수'), 0)}건 / 업체 {_safe_int(row.get('업체수'), 0)}개 / 등급 {_pdf_safe_text(row.get('등급', '기타'))}"
+                        ax.text(0.02, y-0.022, title, fontsize=10.5, weight="bold", va="top")
+                        ax.text(0.98, y-0.024, meta, fontsize=7.8, color="#4C5968", ha="right", va="top")
+                        lines = [
+                            ("선정 근거", _pdf_safe_text(row.get('선정사유', ''))),
+                            ("대표 지적", _pdf_safe_text(row.get('대표지적1', ''))),
+                            ("자체 점검 질문", _pdf_safe_text(row.get('자체점검질문', ''))),
+                        ]
+                        ty = y - 0.058
+                        for label, val in lines:
+                            # basic line-wrap by character length for fallback only
+                            val = re.sub(r"\s+", " ", val).strip()
+                            chunks = [val[i:i+62] for i in range(0, len(val), 62)] or [""]
+                            ax.text(0.03, ty, f"{label}: " + chunks[0], fontsize=8.2, va="top")
+                            ty -= 0.026
+                            for extra in chunks[1:3]:
+                                ax.text(0.13, ty, extra, fontsize=8.2, va="top")
+                                ty -= 0.026
+                        y -= box_h + 0.018
+                    if error_message:
+                        ax.text(0.0, 0.02, "※ 일부 원문 특수문자 때문에 간이 렌더링으로 생성되었습니다.", fontsize=7.5, color="#6E6E6E", va="bottom")
+                    fig.text(0.92, 0.02, f"MFDS Internal Checklist  |  Page {page_no}", fontsize=8, color="#6E6E6E", ha="right")
+                    pdf.savefig(fig); plt.close(fig)
+                    page_no += 1
+    buf.seek(0)
+    return buf.getvalue()
+
 @st.cache_data(show_spinner=False)
 def cached_checklist_pdf(df: pd.DataFrame, period_label: str, cache_token: str, topn_per_field: int = 10):
-    return build_checklist_pdf(df.copy(), period_label, topn_per_field=topn_per_field)
+    try:
+        return build_checklist_pdf(df.copy(), period_label, topn_per_field=topn_per_field)
+    except Exception as e:
+        log(f"rich checklist pdf generation failed; using fallback / period={period_label}: {type(e).__name__}: {e}")
+        log(traceback.format_exc())
+        return _build_checklist_pdf_fallback(df.copy(), period_label, topn_per_field=topn_per_field, error_message=str(e))
 
 @st.cache_data(show_spinner=False)
 def cached_compact_pdf(df: pd.DataFrame, period_label: str, cache_token: str, topn_per_field: int | None = 10):
@@ -4605,7 +4698,7 @@ def build_compact_field_checklist_pdf(filtered: pd.DataFrame, period_label: str,
         return width_px / max(1.0, (x1 - x0))
 
     def _wrap_text_to_box(fig, ax, text_value: str, fontsize: float, x0: float, x1: float) -> str:
-        s = re.sub(r"\s+", " ", str(text_value).strip())
+        s = re.sub(r"\s+", " ", _pdf_safe_text(text_value))
         if not s:
             return ""
         fig.canvas.draw()
@@ -4809,7 +4902,7 @@ def build_checklist_pdf(filtered: pd.DataFrame, period_label: str, topn_per_fiel
         fig.text(right, title_y, subtitle, fontsize=8.2, color="#6E6E6E", va="top", ha="right", linespacing=1.25)
         return left, right, top
     def _wrap_text_to_box(fig, ax, text_value: str, fontsize: float, x0: float, x1: float) -> str:
-        s = re.sub(r"\s+", " ", str(text_value).strip())
+        s = re.sub(r"\s+", " ", _pdf_safe_text(text_value))
         if not s:
             return ""
         fig.canvas.draw()
@@ -4854,7 +4947,7 @@ def build_checklist_pdf(filtered: pd.DataFrame, period_label: str, topn_per_fiel
     def _draw_field_header(ax, field_name: str, y_top: float):
         rect = plt.Rectangle((0.0, y_top - 0.05), 1.0, 0.05, facecolor="#EAF2FC", edgecolor="#B9C2CC", linewidth=0.8)
         ax.add_patch(rect)
-        ax.text(0.015, y_top - 0.012, f"감시분야: {field_name}", fontsize=11.2, weight="bold", va="top", ha="left", color="#184A8B")
+        ax.text(0.015, y_top - 0.012, f"감시분야: {_pdf_safe_text(field_name)}", fontsize=11.2, weight="bold", va="top", ha="left", color="#184A8B")
     def _draw_label_value_row(fig, ax, x: float, y_top: float, width: float, row_h: float, label: str, value: str,
                               label_face: str = "#F6F8FB", value_face: str = "white",
                               label_w_ratio: float = 0.18, fs_label: float = 8.8, fs_value: float = 8.5,
@@ -4878,24 +4971,24 @@ def build_checklist_pdf(filtered: pd.DataFrame, period_label: str, topn_per_fiel
         num_w = 0.032
         num_h = 0.038
         ax.add_patch(plt.Rectangle((num_x, num_y), num_w, num_h, facecolor="#1B73D1", edgecolor="#1B73D1", linewidth=0.0))
-        ax.text(num_x + num_w / 2, num_y + num_h / 2, f"{int(row['분야순번']):02d}", fontsize=10.4, weight="bold",
+        ax.text(num_x + num_w / 2, num_y + num_h / 2, f"{_safe_int(row.get('분야순번'), 0):02d}", fontsize=10.4, weight="bold",
                 va="center", ha="center", color="white")
-        ax.text(x0 + 0.10, y_top - 0.016, f"{row['중점관리영역']}", fontsize=11.0, weight="bold", va="top", ha="left")
-        ax.text(x0 + 0.98, y_top - 0.018, f"반복 {int(row['반복건수'])}건 / 업체 {int(row['업체수'])}개", fontsize=8.5, color="#4C5968", va="top", ha="right")
+        ax.text(x0 + 0.10, y_top - 0.016, f"{_pdf_safe_text(row.get('중점관리영역', ''))}", fontsize=11.0, weight="bold", va="top", ha="left")
+        ax.text(x0 + 0.98, y_top - 0.018, f"반복 {_safe_int(row.get('반복건수'), 0)}건 / 업체 {_safe_int(row.get('업체수'), 0)}개", fontsize=8.5, color="#4C5968", va="top", ha="right")
         y = y_top - header_h
         inner_x = 0.015
         inner_w = 0.97
         label_ratio = 0.18
         value_x0 = inner_x + inner_w * label_ratio + 0.012
         value_x1 = inner_x + inner_w - 0.012
-        grade_text = str(row.get('등급', '기타')).strip() or '기타'
-        rationale = str(row['선정사유']).strip()
-        findings_lines = [f"• {str(row['대표지적1']).strip()}"]
-        ex2 = str(row.get('대표지적2', '')).strip()
+        grade_text = _pdf_safe_text(row.get('등급', '기타')) or '기타'
+        rationale = _pdf_safe_text(row.get('선정사유', ''))
+        findings_lines = [f"• {_pdf_safe_text(row.get('대표지적1', ''))}"]
+        ex2 = _pdf_safe_text(row.get('대표지적2', ''))
         if ex2:
             findings_lines.append(f"• {ex2}")
         findings = "\n".join(findings_lines)
-        question = str(row['자체점검질문']).strip()
+        question = _pdf_safe_text(row.get('자체점검질문', ''))
         check_text = "□ 적합    □ 보완 필요    □ 미해당"
         grade_wrapped = _wrap_text_to_box(fig, ax, grade_text, fontsize=8.5, x0=value_x0, x1=value_x1)
         rationale_wrapped = _wrap_text_to_box(fig, ax, rationale, fontsize=8.5, x0=value_x0, x1=value_x1)
@@ -4951,7 +5044,7 @@ def build_checklist_pdf(filtered: pd.DataFrame, period_label: str, topn_per_fiel
             y = 0.73
             summary_df = checklist_df.groupby("감시분야", as_index=False).size().rename(columns={"size": "항목수"})
             for _, srow in summary_df.iterrows():
-                line = _wrap_text_to_box(fig, ax, f"• {srow['감시분야']}: {int(srow['항목수'])}개", fontsize=9.2, x0=0.01, x1=0.55)
+                line = _wrap_text_to_box(fig, ax, f"• {_pdf_safe_text(srow.get('감시분야', ''))}: {_safe_int(srow.get('항목수'), 0)}개", fontsize=9.2, x0=0.01, x1=0.55)
                 ax.text(0.01, y, line, fontsize=9.2, va="top", ha="left")
                 y -= 0.040 * _line_count(line) + 0.010
         _add_page_footer(fig, 1)
@@ -5818,7 +5911,7 @@ def main():
                 st.info("해당 기간에는 체크리스트로 정리할 반복 지적사항이 부족합니다.")
             else:
                 try:
-                    checklist_pdf_bytes = cached_checklist_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, "checklist_v3"))
+                    checklist_pdf_bytes = cached_checklist_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, "checklist_v4_safe"))
                     st.download_button(
                         label=f"🗂️ 내부 감시용 Checklist 다운로드 ({selected_period})",
                         data=checklist_pdf_bytes,
