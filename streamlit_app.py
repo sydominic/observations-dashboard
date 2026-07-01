@@ -3850,6 +3850,44 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
             "공정밸리데이션": "PV 계획·보고서, CPP/CQA 근거, 배치기록, 공정변경 영향평가",
         }
         return docs_map.get(topic, f"{topic} 관련 기준서, 수행기록, 검토기록, 후속조치 완료근거")
+    def _topic_potential_weakness(topic: str) -> str:
+        topic = str(topic or "").strip()
+        weakness_map = {
+            "세척 밸리데이션/세척관리": "세척기준, 실제 세척기록, 잔류관리 기준 간 연결성이 약할 가능성",
+            "회수/변경/일탈 관리": "후속조치 완료판정과 효과확인 기준이 불명확할 가능성",
+            "제품품질평가/PQR": "PQR 개선사항이 변경관리·CAPA로 전환되는 기준이 약할 가능성",
+            "시험기록/기초자료 관리": "시험결과 중심으로 관리되어 원자료 보존·검토흔적 관리가 약할 가능성",
+            "검체채취/검체관리": "검체 대표성, 보관조건, 라벨·위치 추적성의 연결 관리가 약할 가능성",
+            "제조기록서 관리": "작업지시, 실제 수행내용, 검토기록 간 정합성 확인이 약할 가능성",
+            "시설관리": "제조지원시설 기준과 점검기록, 이상 발생 시 후속조치 연결이 약할 가능성",
+            "장비 적격성평가": "실제 사용조건과 적격성평가 범위, 변경 후 재평가 기준이 불명확할 가능성",
+            "보관조건/창고 관리": "보관조건, 구획·식별, 입출고·재고기록 간 연결 관리가 약할 가능성",
+            "데이터 완전성 관리": "전자·수기기록의 생성, 수정, 검토, 백업 단계별 통제가 약할 가능성",
+            "문서/총람 관리": "기준서 최신본과 실제 운영내용, 현장 양식 간 불일치 가능성",
+            "청소/소독 관리": "청소·소독 기준, 실제 수행기록, 효과평가 근거 간 연결성이 약할 가능성",
+            "환경모니터링 관리": "위치선정 근거, 경향분석, 경보·조치수준 후속조치 연결이 약할 가능성",
+            "공정밸리데이션": "공정조건 변경과 PV 상태, CPP/CQA 관리 기준의 연결성이 약할 가능성",
+        }
+        return weakness_map.get(topic, f"{topic} 관련 기준서와 실제 수행기록, 후속조치 완료근거 간 연결성이 약할 가능성")
+    def _topic_improvement_direction(topic: str) -> str:
+        topic = str(topic or "").strip()
+        direction_map = {
+            "세척 밸리데이션/세척관리": "CHT/DHT, 세척 후 보관, 잔류허용기준, 세척기록 양식 간 정합성 점검",
+            "회수/변경/일탈 관리": "변경·일탈 종료기준, CAPA 연계 기준, 효과확인 기록과 종료승인 근거 보완",
+            "제품품질평가/PQR": "PQR 입력자료, 개선 필요사항, CAPA·변경관리 전환 기준과 완료근거 정비",
+            "시험기록/기초자료 관리": "원자료, 계산근거, 수정이력, 검토자 확인흔적 보존체계 점검",
+            "검체채취/검체관리": "검체채취 기준, 보관검체 포장·라벨, 위치추적 기록과 보관 타당성 점검",
+            "제조기록서 관리": "제조기록서 지시사항, 실제 작업내용, 검토체크리스트와 변경반영 이력 정비",
+            "시설관리": "용수·가스·공조 등 제조지원시설 기준, 점검기록, 이상조치 기록 정합성 점검",
+            "장비 적격성평가": "URS/DQ/IQ/OQ/PQ 범위, 실제 운전조건, 변경 영향평가와 재평가 기준 정비",
+            "보관조건/창고 관리": "보관조건, 온습도 기록, 구획·라벨, 입출고·폐기기록의 추적성 점검",
+            "데이터 완전성 관리": "권한관리, Audit trail 검토, 백업기록, 수기·전자기록 검토 절차 정비",
+            "문서/총람 관리": "기준서 개정이력, 배포현황, 현장 양식, 실제 운영내용의 일치성 점검",
+            "청소/소독 관리": "청소·소독 기준, 소독제 사용조건, 접촉시간, 효과평가 기록 정합성 점검",
+            "환경모니터링 관리": "모니터링 위치·주기, 경향분석, 조치수준 초과 시 후속조치 기준 정비",
+            "공정밸리데이션": "PV 기준, 실제 공정조건, CPP/CQA 관리근거와 변경 영향평가 정비",
+        }
+        return direction_map.get(topic, f"{topic} 관련 기준서, 기록양식, 검토기록, 후속조치 완료근거를 같은 관리축으로 정비")
     def _topic_self_check_questions(topic: str) -> str:
         topic = str(topic or "").strip()
         question_map = {
@@ -3940,6 +3978,8 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
                 "point": "점검: " + _topic_action_text(topic),
                 "impact": _topic_quality_system_impact(topic),
                 "docs": _topic_check_documents(topic),
+                "weakness": _topic_potential_weakness(topic),
+                "improvement": _topic_improvement_direction(topic),
                 "self_check": _topic_self_check_questions(topic),
                 "topic": topic,
                 "cnt": cnt,
@@ -3956,6 +3996,8 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
                 "point": "점검: 기준서, 수행기록, 후속조치의 일치성 확인",
                 "impact": f"{fallback_field} 분야의 기준, 수행기록, 후속조치 정합성 확보 필요",
                 "docs": f"{fallback_field} 관련 기준서, 수행기록, 검토기록, 보완조치 완료근거",
+                "weakness": f"{fallback_field} 분야 기준과 실제 수행기록, 후속조치 완료근거 간 연결성이 약할 가능성",
+                "improvement": f"{fallback_field} 관련 기준서, 기록양식, 검토기록, 보완조치 완료근거를 같은 관리축으로 정비",
                 "self_check": f"{fallback_field} 분야 기준서와 실제 수행기록이 일치하는가? 후속조치 완료근거와 검토 흔적이 남아 있는가?",
                 "topic": fallback_field,
                 "cnt": 0,
@@ -4133,7 +4175,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         _add_page_footer(fig, 1)
         pdf.savefig(fig)
         plt.close(fig)
-        # Page 2: priority check materials
+        # Page 2: potential management weakness + improvement direction
         fig_docs = plt.figure(figsize=a4_landscape)
         left_d, right_d, bottom_d, top_d = _decorate_page(fig_docs, a4_landscape)
         content_left_d = left_d + _cm_to_fig_frac(0.18, a4_landscape, "x")
@@ -4145,68 +4187,32 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         ax_d.axis("off")
         _draw_report_header(fig_docs, a4_landscape, left_d, right_d, top_d, period_kor, period_label, created_at, title_fs=17.0)
         _draw_num_box(ax_d, 0.015, 0.922, 2, "#0EA5A4", box_w=0.03, box_h=0.045, fs=10.5)
-        ax_d.text(0.045, 0.938, "중점 점검항목별 우선 확인자료", transform=ax_d.transAxes, fontsize=14.5, weight="bold", va="top", color="#1F2937")
-        doc_rows = []
+        ax_d.text(0.045, 0.938, "중점 점검항목별 반복 가능 관리취약점 및 보완방향", transform=ax_d.transAxes, fontsize=14.5, weight="bold", va="top", color="#1F2937")
+        weakness_rows = []
         for idx, track in enumerate(track_items):
-            doc_rows.append([
+            weakness_rows.append([
                 f"항목 {idx + 1}\n{track.get('title', '')}",
-                _wrap_cell(track.get("docs", ""), 50),
-                _wrap_cell(track.get("point", "").replace("점검: ", ""), 46),
+                _wrap_cell(track.get("weakness", ""), 52),
+                _wrap_cell(track.get("improvement", ""), 52),
             ])
         _make_axes_table(
             ax_d,
-            ["중점 점검항목", "우선 확인자료", "확인 관점"],
-            doc_rows,
-            bbox=[0.000, 0.190, 1.000, 0.620],
-            col_widths=[0.18, 0.43, 0.39],
+            ["중점 점검항목", "반복 가능 관리취약점", "보완방향"],
+            weakness_rows,
+            bbox=[0.000, 0.180, 1.000, 0.640],
+            col_widths=[0.18, 0.41, 0.41],
             fontsize=9.0,
             header_fs=9.1,
         )
         ax_d.text(
-            0.000, 0.115,
-            "※ 세부 확인질문과 항목별 점검내용은 내부 감시용 Checklist 또는 One page Checklist를 함께 확인하시기 바랍니다.",
-            transform=ax_d.transAxes, fontsize=9.0, color="#4B5563", va="top"
+            0.000, 0.105,
+            "※ 세부 확인항목은 별도 제공되는 내부 감시용 Checklist 또는 One page Checklist를 참고하여 실제 자체점검 범위에 맞게 적용하시기 바랍니다.",
+            transform=ax_d.transAxes, fontsize=9.2, color="#4B5563", va="top"
         )
         _add_page_footer(fig_docs, 2)
         pdf.savefig(fig_docs)
         plt.close(fig_docs)
-        # Page 3: self-check questions
-        fig_q = plt.figure(figsize=a4_landscape)
-        left_q, right_q, bottom_q, top_q = _decorate_page(fig_q, a4_landscape)
-        content_left_q = left_q + _cm_to_fig_frac(0.18, a4_landscape, "x")
-        content_right_q = right_q - _cm_to_fig_frac(0.18, a4_landscape, "x")
-        content_bottom_q = bottom_q + _cm_to_fig_frac(0.12, a4_landscape, "y")
-        content_top_q = top_q - _cm_to_fig_frac(0.12, a4_landscape, "y")
-        ax_q = fig_q.add_axes([content_left_q, content_bottom_q, content_right_q - content_left_q, content_top_q - content_bottom_q], zorder=2)
-        ax_q.set_facecolor("none")
-        ax_q.axis("off")
-        _draw_report_header(fig_q, a4_landscape, left_q, right_q, top_q, period_kor, period_label, created_at, title_fs=17.0)
-        _draw_num_box(ax_q, 0.015, 0.922, 3, "#1B73D1", box_w=0.03, box_h=0.045, fs=10.5)
-        ax_q.text(0.045, 0.938, "중점 점검항목별 자체점검 질문", transform=ax_q.transAxes, fontsize=14.5, weight="bold", va="top", color="#1F2937")
-        question_rows = []
-        for idx, track in enumerate(track_items):
-            question_rows.append([
-                f"항목 {idx + 1}\n{track.get('title', '')}",
-                _wrap_cell(track.get("self_check", ""), 72),
-            ])
-        _make_axes_table(
-            ax_q,
-            ["중점 점검항목", "자체점검 질문"],
-            question_rows,
-            bbox=[0.000, 0.230, 1.000, 0.560],
-            col_widths=[0.22, 0.78],
-            fontsize=9.2,
-            header_fs=9.3,
-        )
-        ax_q.text(
-            0.000, 0.150,
-            "※ 자세한 점검문항과 세부 기준은 내부 감시용 Checklist 또는 One page Checklist를 확인하시기 바랍니다.",
-            transform=ax_q.transAxes, fontsize=9.2, color="#4B5563", va="top"
-        )
-        _add_page_footer(fig_q, 3)
-        pdf.savefig(fig_q)
-        plt.close(fig_q)
-        # Page 4: detailed trend summary
+        # Page 3: detailed trend summary
         fig_summary = plt.figure(figsize=a4_landscape)
         left_s, right_s, bottom_s, top_s = _decorate_page(fig_summary, a4_landscape)
         content_left_s = left_s + _cm_to_fig_frac(0.18, a4_landscape, "x")
@@ -4218,7 +4224,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         ax_s.axis("off")
         _draw_report_header(fig_summary, a4_landscape, left_s, right_s, top_s, period_kor, period_label, created_at, title_fs=18.0)
         y = 0.905
-        _draw_num_box(ax_s, 0.015, y - 0.012, 4, "#1EB7B5", box_w=0.03, box_h=0.045, fs=10.5)
+        _draw_num_box(ax_s, 0.015, y - 0.012, 3, "#1EB7B5", box_w=0.03, box_h=0.045, fs=10.5)
         ax_s.text(0.045, y, "주요 지적사항 트렌드 요약", fontsize=14.5, weight="bold", va="top")
         y -= 0.045
         body_fs = 9.0
@@ -4228,10 +4234,10 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         for wrapped in wrapped_lines:
             ax_s.text(0.01, y, wrapped, fontsize=body_fs, va="top", ha="left", linespacing=1.22, clip_on=True)
             y -= (_line_count(wrapped) * line_step) + para_gap
-        _add_page_footer(fig_summary, 4)
+        _add_page_footer(fig_summary, 3)
         pdf.savefig(fig_summary)
         plt.close(fig_summary)
-        # Page 5: Top5 table + 1차 구분 charts (landscape)
+        # Page 4: Top5 table + 1차 구분 charts (landscape)
         fig2 = plt.figure(figsize=a4_landscape)
         left2, right2, bottom2, top2 = _decorate_page(fig2, a4_landscape)
         gs2 = fig2.add_gridspec(
@@ -4251,7 +4257,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         ax2_table = fig2.add_subplot(gs2[1, :])
         ax2_table.set_facecolor("none")
         ax2_table.axis("off")
-        _draw_num_box(ax2_table, 0.015, 1.067, 5, "#1B73D1", box_w=0.03, box_h=0.045, fs=10.5)
+        _draw_num_box(ax2_table, 0.015, 1.067, 4, "#1B73D1", box_w=0.03, box_h=0.045, fs=10.5)
         ax2_table.text(0.045, 1.05, f"감시분야별 지적사항 Top5 및 주요 현황 ({period_label})", fontsize=13.5, weight="bold", va="bottom")
         headers = ["감시분야", "Top1", "Top2", "Top3", "Top4", "Top5"]
         rows = []
@@ -4374,10 +4380,10 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         _draw_mini_table([left2 + 0.03, bottom2 + 0.040, 0.23, 0.24], "지적사항 건수 Top 10 (회사)", ["제조업체명", "건수"], company_rows, [0.77, 0.23], fs=8.0, title_align="left")
         _draw_mini_table([left2 + 0.31, bottom2 + 0.040, 0.24, 0.24], "지적사항 건수 Top 10 (세부구분)", ["세부구분", "건수"], detail_rows, [0.74, 0.26], fs=8.3, title_align="left")
         _draw_mini_table([left2 + 0.57, bottom2 + 0.040, 0.36, 0.24], "우선관리 등급 별 업체 수", ["우선관리 등급", "업체 수", "해당 업체명"], grade_rows, [0.40, 0.15, 0.45], fs=7.8, title_align="left")
-        _add_page_footer(fig2, 5)
+        _add_page_footer(fig2, 4)
         pdf.savefig(fig2)
         plt.close(fig2)
-        # Page 6: existing graphs
+        # Page 5: existing graphs
         fig3 = plt.figure(figsize=a4_portrait)
         left3, right3, bottom3, top3 = _decorate_page(fig3, a4_portrait)
         gs3 = fig3.add_gridspec(
@@ -4397,7 +4403,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         ax3_sub = fig3.add_subplot(gs3[1, :])
         ax3_sub.set_facecolor("none")
         ax3_sub.axis("off")
-        _draw_num_box(ax3_sub, 0.015, 0.71, 6, "#F2C037", box_w=0.03, box_h=0.045, fs=10.5)
+        _draw_num_box(ax3_sub, 0.015, 0.71, 5, "#F2C037", box_w=0.03, box_h=0.045, fs=10.5)
         ax3_sub.text(0.045, 0.7, "감시분야 및 등급 분포 차트", fontsize=12.8, weight="bold")
         ax3_sub.text(0.045, 0.15, "감시분야와 등급 분포를 동일 기간 기준으로 시각화한 결과입니다.", fontsize=9.2)
         ax1 = fig3.add_subplot(gs3[2, 0])
@@ -4438,7 +4444,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
                 startangle=90,
             )
             ax4.set_title("등급별 비율", fontsize=12, pad=8)
-        _add_page_footer(fig3, 6)
+        _add_page_footer(fig3, 5)
         pdf.savefig(fig3)
         plt.close(fig3)
     buf.seek(0)
@@ -5758,13 +5764,13 @@ def main():
         render_manufacturer_dashboard(w_base, selected_period)
     with report_tab:
         st.markdown("### 📄 식약처 의약품 GMP 실태조사 Letter 다운로드")
-        st.caption("선택한 기간(분기/연간) 기준으로 6페이지 PDF Letter를 생성합니다. 1페이지는 핵심 요약·중점 점검항목 선정 근거·품질시스템 영향, 2페이지는 우선 확인자료, 3페이지는 자체점검 질문, 4페이지는 상세 트렌드 요약, 5페이지는 Top5 표와 보조 요약정보, 6페이지는 감시분야/등급 그래프입니다.")
+        st.caption("선택한 기간(분기/연간) 기준으로 5페이지 PDF Letter를 생성합니다. 1페이지는 핵심 요약·중점 점검항목 선정 근거·품질시스템 영향, 2페이지는 반복 가능 관리취약점 및 보완방향, 3페이지는 상세 트렌드 요약, 4페이지는 Top5 표와 보조 요약정보, 5페이지는 감시분야/등급 그래프입니다.")
         if period_opts and selected_period:
             pf = filter_by_period(w_base, selected_period).copy()
             if pf.empty:
                 st.info("선택한 기간/필터/키워드에 해당하는 데이터가 없어 리포트 다운로드를 비활성화했습니다.")
             else:
-                pdf_bytes = cached_report_pdf(pf, selected_period, _pdf_cache_token(pf, selected_period, "letter_v26_korean_terms_selfcheck_v2"))
+                pdf_bytes = cached_report_pdf(pf, selected_period, _pdf_cache_token(pf, selected_period, "letter_v26_opinion2_weakness_direction_v1"))
                 st.download_button(
                 label=f"📄 식약처 의약품 GMP 실태조사 Letter 다운로드 ({selected_period})",
                 data=pdf_bytes,
