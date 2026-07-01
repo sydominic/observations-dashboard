@@ -3853,10 +3853,10 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
     def _topic_potential_weakness(topic: str) -> str:
         topic = str(topic or "").strip()
         weakness_map = {
-            "세척 밸리데이션/세척관리": "세척기준, 실제 세척기록, 잔류관리 기준 간 연결성이 약할 가능성",
+            "세척 밸리데이션/세척관리": "세척기준, 실제 세척기록, 잔류관리 기준 간 연결성 부족 가능성",
             "회수/변경/일탈 관리": "후속조치 완료판정과 효과확인 기준이 불명확할 가능성",
             "제품품질평가/PQR": "PQR 개선사항이 변경관리·CAPA로 전환되는 기준이 약할 가능성",
-            "시험기록/기초자료 관리": "시험결과 중심으로 관리되어 원자료 보존·검토흔적 관리가 약할 가능성",
+            "시험기록/기초자료 관리": "원자료 보존과 검토흔적 관리가 결과기록 중심으로 운영될 가능성",
             "검체채취/검체관리": "검체 대표성, 보관조건, 라벨·위치 추적성의 연결 관리가 약할 가능성",
             "제조기록서 관리": "작업지시, 실제 수행내용, 검토기록 간 정합성 확인이 약할 가능성",
             "시설관리": "제조지원시설 기준과 점검기록, 이상 발생 시 후속조치 연결이 약할 가능성",
@@ -4085,6 +4085,8 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         wrapped_desc = _truncate_wrapped_text(wrapped_desc, max_desc_lines)
         ax.text(x + 0.018, y + 0.028, wrapped_desc, transform=ax.transAxes, fontsize=6.8, color="#111827", va="bottom", linespacing=1.12, zorder=5)
     def _make_axes_table(ax, headers, rows, bbox, col_widths=None, fontsize=7.2, header_color="#F5F7FB", header_fs=None):
+        if not rows:
+            rows = [["-" for _ in headers]]
         tbl = ax.table(
             cellText=rows,
             colLabels=headers,
@@ -4159,7 +4161,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         drill_rows = []
         for idx, track in enumerate(track_items):
             drill_rows.append([
-                f"항목 {idx + 1}\n{track.get('title', '')}",
+                track.get("title", f"중점 점검항목 {idx + 1}"),
                 _wrap_cell(str(track.get("basis", "")).replace("근거: ", ""), 34),
                 _wrap_cell(track.get("impact", ""), 46),
             ])
@@ -4188,26 +4190,31 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         _draw_report_header(fig_docs, a4_landscape, left_d, right_d, top_d, period_kor, period_label, created_at, title_fs=17.0)
         _draw_num_box(ax_d, 0.015, 0.922, 2, "#0EA5A4", box_w=0.03, box_h=0.045, fs=10.5)
         ax_d.text(0.045, 0.938, "중점 점검항목별 반복 가능 관리취약점 및 보완방향", transform=ax_d.transAxes, fontsize=14.5, weight="bold", va="top", color="#1F2937")
+        ax_d.text(
+            0.000, 0.860,
+            "상위 반복 지적을 단순 자료목록이 아니라, 반복 가능 관리취약점과 보완방향 관점으로 정리했습니다.",
+            transform=ax_d.transAxes, fontsize=10.0, color="#111827", va="top"
+        )
         weakness_rows = []
         for idx, track in enumerate(track_items):
             weakness_rows.append([
-                f"항목 {idx + 1}\n{track.get('title', '')}",
-                _wrap_cell(track.get("weakness", ""), 52),
-                _wrap_cell(track.get("improvement", ""), 52),
+                track.get("title", f"중점 점검항목 {idx + 1}"),
+                _wrap_cell(track.get("weakness", ""), 44),
+                _wrap_cell(track.get("improvement", ""), 44),
             ])
         _make_axes_table(
             ax_d,
             ["중점 점검항목", "반복 가능 관리취약점", "보완방향"],
             weakness_rows,
-            bbox=[0.000, 0.180, 1.000, 0.640],
+            bbox=[0.000, 0.255, 1.000, 0.520],
             col_widths=[0.18, 0.41, 0.41],
-            fontsize=9.0,
-            header_fs=9.1,
+            fontsize=9.8,
+            header_fs=9.8,
         )
         ax_d.text(
-            0.000, 0.105,
+            0.000, 0.155,
             "※ 세부 확인항목은 별도 제공되는 내부 감시용 Checklist 또는 One page Checklist를 참고하여 실제 자체점검 범위에 맞게 적용하시기 바랍니다.",
-            transform=ax_d.transAxes, fontsize=9.2, color="#4B5563", va="top"
+            transform=ax_d.transAxes, fontsize=9.4, color="#4B5563", va="top"
         )
         _add_page_footer(fig_docs, 2)
         pdf.savefig(fig_docs)
@@ -4272,6 +4279,8 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
                 _wrap_cell(row.get("Top4", ""), 18),
                 _wrap_cell(row.get("Top5", ""), 18),
             ])
+        if not rows:
+            rows = [["-", "-", "-", "-", "-", "-"]]
         tbl = ax2_table.table(
             cellText=rows,
             colLabels=headers,
@@ -5770,15 +5779,20 @@ def main():
             if pf.empty:
                 st.info("선택한 기간/필터/키워드에 해당하는 데이터가 없어 리포트 다운로드를 비활성화했습니다.")
             else:
-                pdf_bytes = cached_report_pdf(pf, selected_period, _pdf_cache_token(pf, selected_period, "letter_v26_opinion2_weakness_direction_v1"))
-                st.download_button(
-                label=f"📄 식약처 의약품 GMP 실태조사 Letter 다운로드 ({selected_period})",
-                data=pdf_bytes,
-                file_name=f"{selected_period}_dashboard_report.pdf",
-                mime="application/pdf",
-                key=f"dl_letter_{selected_period}",
-                on_click="ignore",
-            )
+                try:
+                    pdf_bytes = cached_report_pdf(pf, selected_period, _pdf_cache_token(pf, selected_period, "letter_v26_opinion2_weakness_direction_v3"))
+                    st.download_button(
+                        label=f"📄 식약처 의약품 GMP 실태조사 Letter 다운로드 ({selected_period})",
+                        data=pdf_bytes,
+                        file_name=f"{selected_period}_dashboard_report.pdf",
+                        mime="application/pdf",
+                        key=f"dl_letter_{selected_period}",
+                        on_click="ignore",
+                    )
+                except Exception as e:
+                    log(f"letter pdf generation failed / period={selected_period}: {e}")
+                    log(traceback.format_exc())
+                    st.error("Letter PDF 생성 중 오류가 발생했습니다. 기간을 변경한 뒤에도 같은 오류가 반복되면 앱을 재부팅한 후 다시 시도해 주세요.")
         else:
             st.info("Observation 탭에서 기간을 먼저 선택해주세요.")
         st.markdown("### 🗂️ 내부 감시용 Checklist 다운로드")
@@ -5789,15 +5803,20 @@ def main():
             if checklist_preview.empty:
                 st.info("해당 기간에는 체크리스트로 정리할 반복 지적사항이 부족합니다.")
             else:
-                checklist_pdf_bytes = cached_checklist_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, "checklist"))
-                st.download_button(
-                    label=f"🗂️ 내부 감시용 Checklist 다운로드 ({selected_period})",
-                    data=checklist_pdf_bytes,
-                    file_name=f"{selected_period}_internal_checklist.pdf",
-                    mime="application/pdf",
-                    key=f"dl_check_{selected_period}",
-                    on_click="ignore",
-                )
+                try:
+                    checklist_pdf_bytes = cached_checklist_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, "checklist_v2"))
+                    st.download_button(
+                        label=f"🗂️ 내부 감시용 Checklist 다운로드 ({selected_period})",
+                        data=checklist_pdf_bytes,
+                        file_name=f"{selected_period}_internal_checklist.pdf",
+                        mime="application/pdf",
+                        key=f"dl_check_{selected_period}",
+                        on_click="ignore",
+                    )
+                except Exception as e:
+                    log(f"checklist pdf generation failed / period={selected_period}: {e}")
+                    log(traceback.format_exc())
+                    st.error("내부 감시용 Checklist PDF 생성 중 오류가 발생했습니다.")
                 st.markdown("### 📋 One page Checklist 다운로드")
                 st.caption("기존 내부 감시용 체크리스트는 그대로 두고, 감시분야별 자체 점검 질문만 한 장 양식으로 모은 간편 점검용 PDF를 아래에 별도로 추가했습니다.")
                 onepage_scope = st.radio(
@@ -5808,15 +5827,20 @@ def main():
                 )
                 onepage_topn = 10 if onepage_scope == "Top10" else None
                 scope_suffix = "top10" if onepage_scope == "Top10" else "all"
-                compact_pdf_bytes = cached_compact_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, f"onepage_{scope_suffix}"), topn_per_field=onepage_topn)
-                st.download_button(
-                    label=f"📋 One page Checklist 다운로드 - {onepage_scope} ({selected_period})",
-                    data=compact_pdf_bytes,
-                    file_name=f"{selected_period}_onepage_checklist_{scope_suffix}.pdf",
-                    mime="application/pdf",
-                    key=f"dl_onepage_{selected_period}_{scope_suffix}",
-                    on_click="ignore",
-                )
+                try:
+                    compact_pdf_bytes = cached_compact_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, f"onepage_{scope_suffix}_v2"), topn_per_field=onepage_topn)
+                    st.download_button(
+                        label=f"📋 One page Checklist 다운로드 - {onepage_scope} ({selected_period})",
+                        data=compact_pdf_bytes,
+                        file_name=f"{selected_period}_onepage_checklist_{scope_suffix}.pdf",
+                        mime="application/pdf",
+                        key=f"dl_onepage_{selected_period}_{scope_suffix}",
+                        on_click="ignore",
+                    )
+                except Exception as e:
+                    log(f"onepage checklist pdf generation failed / period={selected_period} / scope={scope_suffix}: {e}")
+                    log(traceback.format_exc())
+                    st.error("One page Checklist PDF 생성 중 오류가 발생했습니다.")
         elif not period_opts:
             st.info("기간 데이터가 없습니다.")
     log(f"dashboard rendered / rows={len(df)} / filtered={len(w)} / font={FONT_NAME}")
