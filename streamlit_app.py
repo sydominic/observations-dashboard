@@ -3969,6 +3969,25 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
             "공정밸리데이션": "공정조건 변경과 PV 상태, CPP/CQA 관리 기준의 연결성이 약할 가능성",
         }
         return weakness_map.get(topic, f"{topic} 관련 기준서와 실제 수행기록, 후속조치 완료근거 간 연결성이 약할 가능성")
+    def _topic_weakness_keyword(topic: str) -> str:
+        topic = str(topic or "").strip()
+        keyword_map = {
+            "세척 밸리데이션/세척관리": "세척기준과 실제 세척기록 간 연결성 부족",
+            "회수/변경/일탈 관리": "후속조치 완료판정과 효과확인 기준 불명확",
+            "제품품질평가/PQR": "PQR 개선사항의 CAPA·변경관리 연계 미흡",
+            "시험기록/기초자료 관리": "원자료 보존과 검토흔적 관리 미흡",
+            "검체채취/검체관리": "검체 대표성·보관·추적성 입증 미흡",
+            "제조기록서 관리": "작업지시와 실제 수행기록 간 정합성 부족",
+            "시설관리": "제조지원시설 기준과 점검기록 간 연결성 부족",
+            "장비 적격성평가": "실제 사용조건과 적격성평가 범위 간 불일치",
+            "보관조건/창고 관리": "보관조건·식별·재고기록 추적성 미흡",
+            "데이터 완전성 관리": "기록 생성·수정·검토 단계의 추적성 미흡",
+            "문서/총람 관리": "최신 기준서와 실제 운영내용 간 불일치",
+            "청소/소독 관리": "청소·소독 기준과 효과평가 근거 간 연결성 부족",
+            "환경모니터링 관리": "경향분석과 경보·조치수준 후속조치 연계 미흡",
+            "공정밸리데이션": "공정조건 변경과 밸리데이션 상태 간 연계 미흡",
+        }
+        return keyword_map.get(topic, f"{_short_topic_label(topic, 10)} 관련 기준-실행-기록 정합성 부족")
     def _topic_improvement_direction(topic: str) -> str:
         topic = str(topic or "").strip()
         direction_map = {
@@ -4114,6 +4133,23 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
             f"이번 기간 지적은 {focus_fields}에 집중되어 있으며, 종합 세부유형 기준으로 {top_topic_phrase}이 확인되었습니다. "
             "따라서 단일 항목의 보완보다 각 부서가 기준서, 실제 수행기록, 후속조치까지 이어지는 관리 흐름을 자체 점검하고 필요한 보완계획을 수립하는 방식이 필요합니다."
         )
+        focus_topic_labels = []
+        focus_weakness_keywords = []
+        for t in tracks[:3]:
+            topic_value = str(t.get("topic", "")).strip()
+            label_value = _short_topic_label(topic_value, 10)
+            if label_value and label_value != "-" and label_value not in focus_topic_labels:
+                focus_topic_labels.append(label_value)
+            weakness_value = _topic_weakness_keyword(topic_value)
+            if weakness_value and weakness_value not in focus_weakness_keywords:
+                focus_weakness_keywords.append(weakness_value)
+        focus_topic_text = ", ".join(focus_topic_labels[:3]) if focus_topic_labels else "상위 반복유형"
+        weakness_keyword_text = ", ".join(focus_weakness_keywords[:3]) if focus_weakness_keywords else "기준-실행-기록 정합성 부족"
+        weakness_intro = (
+            "반복 지적이 누적된 항목은 동일한 관리축에서 재발 가능성이 있는지 우선 확인할 필요가 있습니다. "
+            f"특히 {focus_topic_text} 관련 지적에서는 {weakness_keyword_text} 등의 관리취약점이 예상되므로, "
+            "아래 내용을 참고하여 사전 점검 및 보완을 진행할 필요가 있는 것으로 판단됩니다."
+        )
         metrics = {
             "total_count": total_count,
             "first_field": first_field,
@@ -4131,6 +4167,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
             "focus_fields": focus_fields,
             "top_topic_phrase": top_topic_phrase,
             "message": message,
+            "weakness_intro": weakness_intro,
             "tracks": tracks,
             "steps": steps,
             "topic_df": topic_df,
@@ -4290,13 +4327,9 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         _draw_report_header(fig_docs, a4_landscape, left_d, right_d, top_d, period_kor, period_label, created_at, title_fs=17.0)
         _draw_num_box(ax_d, 0.015, 0.922, 2, "#0EA5A4", box_w=0.03, box_h=0.045, fs=10.5)
         ax_d.text(0.045, 0.938, "반복 가능 관리취약점 및 보완방향", transform=ax_d.transAxes, fontsize=14.5, weight="bold", va="top", color="#1F2937")
-        ax_d.text(0.000, 0.855, "Letter 성격에는 이 방식이 적합합니다.", transform=ax_d.transAxes, fontsize=10.4, weight="bold", color="#111827", va="top")
-        intro = (
-            "단순 자료 목록보다 한 단계 더 나아가, 반복 지적이 왜 생겼을 가능성이 있는지와 보완방향을 함께 보여줍니다. "
-            "아래 내용은 선택 기간의 상위 반복유형을 기준으로 자동 산정한 관리취약점 가설이며, 실제 보완범위는 내부 자체점검 결과에 따라 조정해야 합니다."
-        )
-        ax_d.text(0.000, 0.812, _wrap_text_to_axes(fig_docs, ax_d, intro, fontsize=9.8, x0=0.000, x1=0.975),
-                  transform=ax_d.transAxes, fontsize=9.8, color="#111827", va="top", linespacing=1.25)
+        intro = report_metrics.get("weakness_intro", "반복 지적이 누적된 항목은 동일한 관리축에서 재발 가능성이 있는지 우선 확인할 필요가 있습니다. 아래 내용을 참고하여 사전 점검 및 보완을 진행할 필요가 있는 것으로 판단됩니다.")
+        ax_d.text(0.000, 0.855, _wrap_text_to_axes(fig_docs, ax_d, intro, fontsize=10.0, x0=0.000, x1=0.975),
+                  transform=ax_d.transAxes, fontsize=10.0, color="#111827", va="top", linespacing=1.28)
         weakness_rows = []
         for idx, item in enumerate(track_items):
             weakness_rows.append([
@@ -4497,7 +4530,7 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         left3, right3, bottom3, top3 = _decorate_page(fig3, a4_portrait)
         gs3 = fig3.add_gridspec(
             4, 2,
-            height_ratios=[0.10, 0.10, 1.0, 1.0],
+            height_ratios=[0.10, 0.07, 1.04, 1.04],
             left=left3 + _cm_to_fig_frac(0.18, a4_portrait, "x"),
             right=right3 - _cm_to_fig_frac(0.18, a4_portrait, "x"),
             top=top3 - _cm_to_fig_frac(0.12, a4_portrait, "y"),
@@ -4512,9 +4545,8 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         ax3_sub = fig3.add_subplot(gs3[1, :])
         ax3_sub.set_facecolor("none")
         ax3_sub.axis("off")
-        _draw_num_box(ax3_sub, 0.015, 0.71, 5, "#F2C037", box_w=0.03, box_h=0.045, fs=10.5)
-        ax3_sub.text(0.045, 0.7, "감시분야 및 등급 분포 차트", fontsize=12.8, weight="bold")
-        ax3_sub.text(0.045, 0.15, "감시분야와 등급 분포를 동일 기간 기준으로 시각화한 결과입니다.", fontsize=9.2)
+        _draw_num_box(ax3_sub, 0.015, 0.48, 5, "#F2C037", box_w=0.03, box_h=0.045, fs=10.5)
+        ax3_sub.text(0.045, 0.50, "감시분야 및 등급 분포 차트", fontsize=13.0, weight="bold", va="center")
         ax1 = fig3.add_subplot(gs3[2, 0])
         ax1.set_facecolor("none")
         if not field_df.empty:
@@ -5880,7 +5912,7 @@ def main():
                 st.info("선택한 기간/필터/키워드에 해당하는 데이터가 없어 리포트 다운로드를 비활성화했습니다.")
             else:
                 try:
-                    pdf_bytes = cached_report_pdf(pf, selected_period, _pdf_cache_token(pf, selected_period, "letter_v26_opinion2_weakness_direction_v4"))
+                    pdf_bytes = cached_report_pdf(pf, selected_period, _pdf_cache_token(pf, selected_period, "letter_v26_opinion2_dynamic_intro_v5"))
                     st.download_button(
                         label=f"📄 식약처 의약품 GMP 실태조사 Letter 다운로드 ({selected_period})",
                         data=pdf_bytes,
