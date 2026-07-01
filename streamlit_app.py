@@ -3035,14 +3035,21 @@ def _render_global_period_selector(df: pd.DataFrame) -> tuple[str | None, list[s
 
 
 def filter_by_period(df: pd.DataFrame, period_label: str) -> pd.DataFrame:
-    if str(period_label).endswith("연간"):
-        year = str(period_label).split("-")[0]
-        if "연도" not in df.columns:
-            return df.iloc[0:0].copy()
-        return df[df["연도"].astype(str).str.replace(".0", "", regex=False) == str(year)].copy()
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return pd.DataFrame(columns=getattr(df, "columns", []))
+    label = str(period_label or "").strip()
+    if label.endswith("연간"):
+        year = label.split("-")[0]
+        if "연도" in df.columns:
+            year_ser = df["연도"].astype(str).str.replace(".0", "", regex=False).str.strip()
+            return df[year_ser == str(year)].copy()
+        if "연도분기" in df.columns:
+            q_ser = df["연도분기"].astype(str).str.strip()
+            return df[q_ser.str.startswith(f"{year}-", na=False)].copy()
+        return df.iloc[0:0].copy()
     if "연도분기" not in df.columns:
         return df.iloc[0:0].copy()
-    return df[df["연도분기"].astype(str) == str(period_label)].copy()
+    return df[df["연도분기"].astype(str).str.strip() == label].copy()
 TOPIC_ADVICE = {
     "교정/점검 관리": "계측기와 점검항목의 주기, 허용기준, 사용범위를 먼저 재점검하는 편이 좋습니다.",
     "환경/온습도 관리": "온·습도와 차압, 공조 상태를 기록-점검-이탈대응까지 한 흐름으로 묶어 관리하는 것이 좋습니다.",
@@ -3853,16 +3860,16 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
     def _topic_potential_weakness(topic: str) -> str:
         topic = str(topic or "").strip()
         weakness_map = {
-            "세척 밸리데이션/세척관리": "세척기준, 실제 세척기록, 잔류관리 기준 간 연결성 부족 가능성",
-            "회수/변경/일탈 관리": "후속조치 완료판정과 효과확인 기준이 불명확할 가능성",
-            "제품품질평가/PQR": "PQR 개선사항이 변경관리·CAPA로 전환되는 기준이 약할 가능성",
-            "시험기록/기초자료 관리": "원자료 보존과 검토흔적 관리가 결과기록 중심으로 운영될 가능성",
-            "검체채취/검체관리": "검체 대표성, 보관조건, 라벨·위치 추적성의 연결 관리가 약할 가능성",
-            "제조기록서 관리": "작업지시, 실제 수행내용, 검토기록 간 정합성 확인이 약할 가능성",
-            "시설관리": "제조지원시설 기준과 점검기록, 이상 발생 시 후속조치 연결이 약할 가능성",
-            "장비 적격성평가": "실제 사용조건과 적격성평가 범위, 변경 후 재평가 기준이 불명확할 가능성",
-            "보관조건/창고 관리": "보관조건, 구획·식별, 입출고·재고기록 간 연결 관리가 약할 가능성",
-            "데이터 완전성 관리": "전자·수기기록의 생성, 수정, 검토, 백업 단계별 통제가 약할 가능성",
+            "세척 밸리데이션/세척관리": "세척 기준은 있으나 실제 세척기록, 세척 후 보관기준, 잔류허용기준이 서로 연결되어 관리되지 않을 가능성",
+            "회수/변경/일탈 관리": "이슈 발생 후 후속조치 완료판정, 효과확인, 종료승인 기준이 서로 분리되어 운영될 가능성",
+            "제품품질평가/PQR": "PQR에서 도출된 개선 필요사항이 변경관리 또는 CAPA로 전환되는 기준과 완료근거가 약할 가능성",
+            "시험기록/기초자료 관리": "시험결과는 관리되나 원자료 보존, 계산근거, 수정이력, 검토자 확인흔적이 결과기록 중심으로 운영될 가능성",
+            "검체채취/검체관리": "검체채취 기준, 보관조건, 라벨·위치 추적성이 각각 관리되어 검체 대표성 입증이 약할 가능성",
+            "제조기록서 관리": "작업지시, 실제 수행내용, 현장기록, 검토기록 간 정합성 확인이 형식적으로 운영될 가능성",
+            "시설관리": "제조지원시설 관리기준, 실제 점검기록, 이상 발생 시 후속조치가 하나의 관리축으로 연결되지 않을 가능성",
+            "장비 적격성평가": "실제 사용조건, 적격성평가 범위, 변경 후 재평가 필요성 판단기준이 명확하지 않을 가능성",
+            "보관조건/창고 관리": "보관조건, 구획·식별, 입출고·재고기록이 분리되어 창고 운영의 추적성이 약할 가능성",
+            "데이터 완전성 관리": "전자·수기기록의 생성, 수정, 검토, 백업 단계별 책임과 검토흔적이 약할 가능성",
             "문서/총람 관리": "기준서 최신본과 실제 운영내용, 현장 양식 간 불일치 가능성",
             "청소/소독 관리": "청소·소독 기준, 실제 수행기록, 효과평가 근거 간 연결성이 약할 가능성",
             "환경모니터링 관리": "위치선정 근거, 경향분석, 경보·조치수준 후속조치 연결이 약할 가능성",
@@ -3872,16 +3879,16 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
     def _topic_improvement_direction(topic: str) -> str:
         topic = str(topic or "").strip()
         direction_map = {
-            "세척 밸리데이션/세척관리": "CHT/DHT, 세척 후 보관, 잔류허용기준, 세척기록 양식 간 정합성 점검",
-            "회수/변경/일탈 관리": "변경·일탈 종료기준, CAPA 연계 기준, 효과확인 기록과 종료승인 근거 보완",
-            "제품품질평가/PQR": "PQR 입력자료, 개선 필요사항, CAPA·변경관리 전환 기준과 완료근거 정비",
-            "시험기록/기초자료 관리": "원자료, 계산근거, 수정이력, 검토자 확인흔적 보존체계 점검",
-            "검체채취/검체관리": "검체채취 기준, 보관검체 포장·라벨, 위치추적 기록과 보관 타당성 점검",
-            "제조기록서 관리": "제조기록서 지시사항, 실제 작업내용, 검토체크리스트와 변경반영 이력 정비",
-            "시설관리": "용수·가스·공조 등 제조지원시설 기준, 점검기록, 이상조치 기록 정합성 점검",
-            "장비 적격성평가": "URS/DQ/IQ/OQ/PQ 범위, 실제 운전조건, 변경 영향평가와 재평가 기준 정비",
-            "보관조건/창고 관리": "보관조건, 온습도 기록, 구획·라벨, 입출고·폐기기록의 추적성 점검",
-            "데이터 완전성 관리": "권한관리, Audit trail 검토, 백업기록, 수기·전자기록 검토 절차 정비",
+            "세척 밸리데이션/세척관리": "CHT/DHT, 세척 후 보관, 잔류허용기준, 세척기록 양식을 같은 기준으로 연결하여 정합성 점검",
+            "회수/변경/일탈 관리": "변경·일탈 종료기준, CAPA 연계 기준, 효과확인 기록, 종료승인 근거가 이어지도록 보완",
+            "제품품질평가/PQR": "PQR 입력자료, 개선 필요사항, CAPA·변경관리 전환 기준, 완료근거를 추적 가능하게 정비",
+            "시험기록/기초자료 관리": "원자료, 계산근거, 수정이력, 검토자 확인흔적이 결과기록과 함께 보존되도록 체계 점검",
+            "검체채취/검체관리": "검체채취 기준, 보관검체 포장·라벨, 위치추적 기록, 보관 타당성 근거를 연결하여 점검",
+            "제조기록서 관리": "제조기록서 지시사항, 실제 작업내용, 검토체크리스트, 변경반영 이력이 일치하도록 정비",
+            "시설관리": "용수·가스·공조 등 제조지원시설 기준, 점검기록, 이상조치 기록을 같은 관리축으로 정합성 점검",
+            "장비 적격성평가": "URS/DQ/IQ/OQ/PQ 범위, 실제 운전조건, 변경 영향평가, 재평가 기준을 함께 정비",
+            "보관조건/창고 관리": "보관조건, 온습도 기록, 구획·라벨, 입출고·폐기기록이 이어지도록 추적성 점검",
+            "데이터 완전성 관리": "권한관리, Audit trail 검토, 백업기록, 수기·전자기록 검토 절차를 일관되게 정비",
             "문서/총람 관리": "기준서 개정이력, 배포현황, 현장 양식, 실제 운영내용의 일치성 점검",
             "청소/소독 관리": "청소·소독 기준, 소독제 사용조건, 접촉시간, 효과평가 기록 정합성 점검",
             "환경모니터링 관리": "모니터링 위치·주기, 경향분석, 조치수준 초과 시 후속조치 기준 정비",
@@ -4189,33 +4196,33 @@ def build_report_pdf(filtered: pd.DataFrame, period_label: str) -> bytes:
         ax_d.axis("off")
         _draw_report_header(fig_docs, a4_landscape, left_d, right_d, top_d, period_kor, period_label, created_at, title_fs=17.0)
         _draw_num_box(ax_d, 0.015, 0.922, 2, "#0EA5A4", box_w=0.03, box_h=0.045, fs=10.5)
-        ax_d.text(0.045, 0.938, "중점 점검항목별 반복 가능 관리취약점 및 보완방향", transform=ax_d.transAxes, fontsize=14.5, weight="bold", va="top", color="#1F2937")
-        ax_d.text(
-            0.000, 0.860,
-            "상위 반복 지적을 단순 자료목록이 아니라, 반복 가능 관리취약점과 보완방향 관점으로 정리했습니다.",
-            transform=ax_d.transAxes, fontsize=10.0, color="#111827", va="top"
+        ax_d.text(0.045, 0.938, "반복 가능 관리취약점 및 보완방향", transform=ax_d.transAxes, fontsize=14.5, weight="bold", va="top", color="#1F2937")
+        ax_d.text(0.000, 0.855, "Letter 성격에는 이 방식이 적합합니다.", transform=ax_d.transAxes, fontsize=10.4, weight="bold", color="#111827", va="top")
+        intro = (
+            "단순 자료 목록보다 한 단계 더 나아가, 반복 지적이 왜 생겼을 가능성이 있는지와 보완방향을 함께 보여줍니다. "
+            "아래 내용은 선택 기간의 상위 반복유형을 기준으로 자동 산정한 관리취약점 가설이며, 실제 보완범위는 내부 자체점검 결과에 따라 조정해야 합니다."
         )
+        ax_d.text(0.000, 0.812, _wrap_text_to_axes(fig_docs, ax_d, intro, fontsize=9.8, x0=0.000, x1=0.975),
+                  transform=ax_d.transAxes, fontsize=9.8, color="#111827", va="top", linespacing=1.25)
         weakness_rows = []
-        for idx, track in enumerate(track_items):
+        for idx, item in enumerate(track_items):
             weakness_rows.append([
-                track.get("title", f"중점 점검항목 {idx + 1}"),
-                _wrap_cell(track.get("weakness", ""), 44),
-                _wrap_cell(track.get("improvement", ""), 44),
+                item.get("title", f"중점 점검항목 {idx + 1}"),
+                _wrap_cell(item.get("weakness", ""), 34),
+                _wrap_cell(item.get("improvement", ""), 34),
             ])
         _make_axes_table(
             ax_d,
             ["중점 점검항목", "반복 가능 관리취약점", "보완방향"],
             weakness_rows,
-            bbox=[0.000, 0.255, 1.000, 0.520],
+            bbox=[0.000, 0.230, 1.000, 0.475],
             col_widths=[0.18, 0.41, 0.41],
-            fontsize=9.8,
-            header_fs=9.8,
+            fontsize=9.2,
+            header_fs=9.4,
         )
-        ax_d.text(
-            0.000, 0.155,
-            "※ 세부 확인항목은 별도 제공되는 내부 감시용 Checklist 또는 One page Checklist를 참고하여 실제 자체점검 범위에 맞게 적용하시기 바랍니다.",
-            transform=ax_d.transAxes, fontsize=9.4, color="#4B5563", va="top"
-        )
+        note = "※ 세부 확인항목은 별도 제공되는 내부 감시용 Checklist 또는 One page Checklist를 참고하여 실제 자체점검 범위에 맞게 적용하시기 바랍니다."
+        ax_d.text(0.000, 0.145, _wrap_text_to_axes(fig_docs, ax_d, note, fontsize=9.2, x0=0.000, x1=0.975),
+                  transform=ax_d.transAxes, fontsize=9.2, color="#4B5563", va="top", linespacing=1.18)
         _add_page_footer(fig_docs, 2)
         pdf.savefig(fig_docs)
         plt.close(fig_docs)
@@ -5780,7 +5787,7 @@ def main():
                 st.info("선택한 기간/필터/키워드에 해당하는 데이터가 없어 리포트 다운로드를 비활성화했습니다.")
             else:
                 try:
-                    pdf_bytes = cached_report_pdf(pf, selected_period, _pdf_cache_token(pf, selected_period, "letter_v26_opinion2_weakness_direction_v3"))
+                    pdf_bytes = cached_report_pdf(pf, selected_period, _pdf_cache_token(pf, selected_period, "letter_v26_opinion2_weakness_direction_v4"))
                     st.download_button(
                         label=f"📄 식약처 의약품 GMP 실태조사 Letter 다운로드 ({selected_period})",
                         data=pdf_bytes,
@@ -5798,13 +5805,20 @@ def main():
         st.markdown("### 🗂️ 내부 감시용 Checklist 다운로드")
         st.caption("선택한 기간의 실제 지적사항 문장을 읽어 반복 지적을 관리축으로 묶은 내부 감시용 세로 PDF입니다. 분야별로 분리해서 보여주며, 각 분야에서 최대 10개까지 체크리스트를 추립니다. 10개 미만인 경우는 해당 개수만 반영합니다.")
         if period_opts and selected_period:
-            pf_check = filter_by_period(w_base, selected_period).copy()
-            checklist_preview = build_repetitive_checklist_items(pf_check, selected_period, topn_per_field=10)
+            try:
+                pf_check = filter_by_period(w_base, selected_period).copy()
+                checklist_preview = build_repetitive_checklist_items(pf_check, selected_period, topn_per_field=10)
+            except Exception as e:
+                log(f"checklist preview generation failed / period={selected_period}: {e}")
+                log(traceback.format_exc())
+                pf_check = pd.DataFrame()
+                checklist_preview = pd.DataFrame()
+                st.error("체크리스트 미리보기 생성 중 오류가 발생했습니다. 기간을 다시 선택하거나 앱을 재부팅한 후 다시 시도해 주세요.")
             if checklist_preview.empty:
                 st.info("해당 기간에는 체크리스트로 정리할 반복 지적사항이 부족합니다.")
             else:
                 try:
-                    checklist_pdf_bytes = cached_checklist_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, "checklist_v2"))
+                    checklist_pdf_bytes = cached_checklist_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, "checklist_v3"))
                     st.download_button(
                         label=f"🗂️ 내부 감시용 Checklist 다운로드 ({selected_period})",
                         data=checklist_pdf_bytes,
@@ -5828,7 +5842,7 @@ def main():
                 onepage_topn = 10 if onepage_scope == "Top10" else None
                 scope_suffix = "top10" if onepage_scope == "Top10" else "all"
                 try:
-                    compact_pdf_bytes = cached_compact_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, f"onepage_{scope_suffix}_v2"), topn_per_field=onepage_topn)
+                    compact_pdf_bytes = cached_compact_pdf(pf_check, selected_period, _pdf_cache_token(pf_check, selected_period, f"onepage_{scope_suffix}_v3"), topn_per_field=onepage_topn)
                     st.download_button(
                         label=f"📋 One page Checklist 다운로드 - {onepage_scope} ({selected_period})",
                         data=compact_pdf_bytes,
