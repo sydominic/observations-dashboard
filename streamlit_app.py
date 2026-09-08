@@ -253,18 +253,26 @@ def _merge_external_topic_learning_rules() -> None:
 _merge_external_topic_learning_rules()
 
 def setup_korean_font():
-    """Configure a Korean-capable font for Matplotlib/PDF output.
+    """Configure a Korean-capable font for Matplotlib/PDF output without apt packages.
 
-    Streamlit Cloud installs Linux fonts through packages.txt. However,
-    Matplotlib can still miss newly installed CJK fonts if the font cache is
-    stale. Therefore this function registers known font file paths directly
-    before falling back to font-family names.
+    v26 rule:
+    - Do not depend on packages.txt / apt-get.
+    - First use repo-local font files if the user places them under assets/fonts.
+    - If local files are absent, use the pip dependency koreanize-matplotlib.
+    - Classification, row_id, assignment lock and learning-rule logic are not touched.
     """
     rcParams["axes.unicode_minus"] = False
     rcParams["pdf.fonttype"] = 42
     rcParams["ps.fonttype"] = 42
 
+    repo_font_dir = APP_DIR / "assets" / "fonts"
     font_file_candidates = [
+        repo_font_dir / "NanumGothic.ttf",
+        repo_font_dir / "NanumGothicBold.ttf",
+        repo_font_dir / "NanumBarunGothic.ttf",
+        repo_font_dir / "NotoSansKR-Regular.ttf",
+        repo_font_dir / "NotoSansCJKkr-Regular.otf",
+        repo_font_dir / "NotoSansCJK-Regular.ttc",
         "/usr/share/fonts/truetype/nanum/NanumGothic.ttf",
         "/usr/share/fonts/truetype/nanum/NanumBarunGothic.ttf",
         "/usr/share/fonts/truetype/nanum/NanumGothicBold.ttf",
@@ -288,6 +296,29 @@ def setup_korean_font():
                 log(f"korean font file registration failed: {font_path} / {exc}")
             except Exception:
                 pass
+
+    # pip-only fallback. This avoids Linux apt packages and normally embeds NanumGothic
+    # through the Python dependency declared in requirements.txt.
+    try:
+        import koreanize_matplotlib  # noqa: F401
+        rcParams["axes.unicode_minus"] = False
+        rcParams["pdf.fonttype"] = 42
+        rcParams["ps.fonttype"] = 42
+        fam = rcParams.get("font.family", [])
+        if isinstance(fam, (list, tuple)) and fam:
+            return str(fam[0])
+        if isinstance(fam, str) and fam:
+            return fam
+        available = {f.name for f in fm.fontManager.ttflist}
+        for name in ("NanumGothic", "Nanum Gothic", "NanumBarunGothic"):
+            if name in available:
+                rcParams["font.family"] = [name]
+                return name
+    except Exception as exc:
+        try:
+            log(f"koreanize_matplotlib fallback failed: {exc}")
+        except Exception:
+            pass
 
     candidates = [
         "NanumGothic", "Nanum Gothic", "NanumBarunGothic",
@@ -5984,7 +6015,7 @@ def main():
             st.info("기간 데이터가 없습니다.")
     log(f"dashboard rendered / rows={len(df)} / filtered={len(w)} / font={FONT_NAME}")
     if not FONT_NAME:
-        st.error("한글 폰트를 찾지 못했습니다. GitHub의 packages.txt에 fonts-nanum이 포함되어 있는지 확인한 뒤 앱을 재부팅해 주세요.")
+        st.error("한글 PDF 폰트를 찾지 못했습니다. packages.txt는 사용하지 말고 requirements.txt의 koreanize-matplotlib 또는 assets/fonts의 로컬 폰트를 확인해 주세요.")
 try:
     if __name__ == "__main__":
         main()

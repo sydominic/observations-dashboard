@@ -1,0 +1,7 @@
+# V26 - Package-free Korean PDF font fix
+
+- `packages.txt` / apt-get 의존을 제거했습니다.
+- `requirements.txt`에 pip dependency `koreanize-matplotlib`을 추가하여 Streamlit Cloud에서 Linux packages 설치 없이 한글 PDF 폰트를 사용할 수 있게 했습니다.
+- `assets/fonts/` 로컬 폰트 우선 탐색을 추가했습니다. 필요 시 사용자가 직접 공식 폰트 파일을 업로드하면 그 폰트를 우선 사용합니다.
+- PDF 분석보고서/내부감시 Checklist/One page Checklist 등 Matplotlib PDF 출력의 한글 폰트 설정 경로를 보강했습니다.
+- 분류 규칙, row_id, topic_assignments, 기준선 잠금, Supabase Storage 구조는 변경하지 않았습니다.
